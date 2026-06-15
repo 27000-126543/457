@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/stores/appStore';
-import { mockEmergencyPlans } from '@/mock/data';
 import { getApprovalTypeLabel, getUrgencyLabel, formatDateTime } from '@/utils/format';
 import type { Urgency, ApprovalFlowRecord } from '@/types';
 import ApprovalEfficiencyChart from '@/components/charts/ApprovalEfficiencyChart';
@@ -41,8 +40,8 @@ const ACTION_DOT: Record<ApprovalFlowRecord['action'], string> = {
 
 export default function Approval() {
   const {
-    approvals, flowRecords, escalationLogs,
-    approveItem, rejectItem, checkAndEscalate,
+    approvals, flowRecords, escalationLogs, emergencyPlans,
+    approveItem, rejectItem, checkAndEscalate, finalizeApproval,
   } = useAppStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -71,8 +70,11 @@ export default function Approval() {
   const overdueCount = pending.filter((a) => isOverdue(a.deadline)).length;
   const approvedToday = approvals.filter((a) => a.status === 'approved').length;
   const relatedPlan = selected
-    ? mockEmergencyPlans.find((p) => p.id === selected.planId)
+    ? emergencyPlans.find((p) => p.id === selected.planId)
     : null;
+  const showFinalizeButtons = selected && relatedPlan
+    ? selected.type === 'legal_review' && selected.status === 'approved' && relatedPlan.status === 'under_review'
+    : false;
 
   const planFlowRecords = selected
     ? approvals
@@ -264,6 +266,25 @@ export default function Approval() {
                 <div className="text-xs text-amber-warn">原审批人: {selected.escalatedFrom}</div>
               )}
               <div className="text-xs text-steel">当前审批人: {selected.currentApprover}</div>
+              {showFinalizeButtons && selected && (
+                <div className="p-4 rounded-lg bg-neon-cyan/10 border border-neon-cyan/30">
+                  <p className="text-sm text-white font-medium mb-3">终审已通过，请选择下一步</p>
+                  <div className="flex gap-3">
+                    <button
+                      className="btn-ghost flex-1"
+                      onClick={() => finalizeApproval(selected.id, 'approved')}
+                    >
+                      标记为已批准
+                    </button>
+                    <button
+                      className="btn-primary flex-1"
+                      onClick={() => finalizeApproval(selected.id, 'executing')}
+                    >
+                      直接启动执行
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="flex gap-3 pt-2">
                 <button className="btn-primary" onClick={() => approveItem(selected.id)}>
                   通过

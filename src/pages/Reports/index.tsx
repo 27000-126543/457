@@ -4,6 +4,36 @@ import { mockDailyReport, mockRiskEvents, mockApprovals, mockEmergencyPlans } fr
 import { getRiskIndexColor, getPlanStatusLabel, getApprovalTypeLabel } from '@/utils/format';
 import { exportDailyReportPDF, exportDailyReportExcel } from '@/utils/exporters';
 
+interface SubscriptionConfig {
+  id: string;
+  modules: string[];
+  recipients: string[];
+  frequency: 'daily' | 'weekly' | 'monthly';
+  formats: ('pdf' | 'excel')[];
+  enabled: boolean;
+  createdAt: string;
+}
+interface SendRecord {
+  id: string;
+  subscriptionId: string;
+  sentAt: string;
+  modules: string[];
+  formats: string[];
+  recipients: string[];
+  status: 'success' | 'failed';
+}
+
+const mockSubscriptions: SubscriptionConfig[] = [
+  { id: 'SUB001', modules: ['category', 'trend'], recipients: ['ceo@company.com', 'cfo@company.com'], frequency: 'daily', formats: ['pdf', 'excel'], enabled: true, createdAt: '2026-06-01T09:00:00' },
+  { id: 'SUB002', modules: ['category', 'risk', 'emergency'], recipients: ['ops@company.com'], frequency: 'weekly', formats: ['excel'], enabled: false, createdAt: '2026-06-05T10:00:00' },
+];
+const mockSendRecords: SendRecord[] = [
+  { id: 'SR001', subscriptionId: 'SUB001', sentAt: '2026-06-15T06:00:00', modules: ['category', 'trend'], formats: ['pdf', 'excel'], recipients: ['ceo@company.com', 'cfo@company.com'], status: 'success' },
+  { id: 'SR002', subscriptionId: 'SUB001', sentAt: '2026-06-14T06:00:00', modules: ['category', 'trend'], formats: ['pdf', 'excel'], recipients: ['ceo@company.com', 'cfo@company.com'], status: 'success' },
+  { id: 'SR003', subscriptionId: 'SUB001', sentAt: '2026-06-13T06:00:00', modules: ['category', 'trend'], formats: ['pdf', 'excel'], recipients: ['ceo@company.com', 'cfo@company.com'], status: 'success' },
+  { id: 'SR004', subscriptionId: 'SUB002', sentAt: '2026-06-10T06:00:00', modules: ['category', 'risk', 'emergency'], formats: ['excel'], recipients: ['ops@company.com'], status: 'failed' },
+];
+
 const RANGES = [7, 30, 90] as const;
 
 const MODULE_CONFIG = [
@@ -30,6 +60,14 @@ export default function Reports() {
   const [selectedModules, setSelectedModules] = useState<Set<ModuleKey>>(
     new Set(MODULE_CONFIG.filter(m => m.defaultChecked).map(m => m.key))
   );
+  const [subscriptions, setSubscriptions] = useState<SubscriptionConfig[]>(mockSubscriptions);
+  const [editingSub, setEditingSub] = useState<SubscriptionConfig | null>(null);
+  const [subModules, setSubModules] = useState<Set<string>>(new Set());
+  const [subRecipients, setSubRecipients] = useState('');
+  const [subFrequency, setSubFrequency] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [subFormats, setSubFormats] = useState<Set<'pdf' | 'excel'>>(new Set(['pdf']));
+  const [subEnabled, setSubEnabled] = useState(true);
+  const [showAlert, setShowAlert] = useState(false);
   const { categorySummaries, trendData } = mockDailyReport;
 
   const filtered = useMemo(() => trendData.slice(-range), [trendData, range]);
@@ -37,6 +75,11 @@ export default function Reports() {
   const avgOnTime = (categorySummaries.reduce((s, c) => s + c.onTimeRate, 0) / totalCategories).toFixed(1);
   const avgCostDev = (categorySummaries.reduce((s, c) => s + c.costDeviation, 0) / totalCategories).toFixed(1);
   const totalRisk = categorySummaries.reduce((s, c) => s + c.riskEventCount, 0);
+
+  const sortedRecords = useMemo(
+    () => [...mockSendRecords].sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime()).slice(0, 10),
+    []
+  );
 
   const toggleModule = (key: ModuleKey) => {
     setSelectedModules(prev => {
@@ -50,6 +93,104 @@ export default function Reports() {
   const modulesList = Array.from(selectedModules);
 
   const hasModule = (key: ModuleKey) => selectedModules.has(key);
+
+  const handleExport = (type: 'pdf' | 'excel') => {
+    if (selectedModules.size === 0) {
+      setShowAlert(true);
+      setTimeout(() => setShowAlert(false), 2000);
+      return;
+    }
+    if (type === 'pdf') {
+      exportDailyReportPDF(mockDailyReport, { modules: modulesList });
+    } else {
+      exportDailyReportExcel(mockDailyReport, { modules: modulesList });
+    }
+  };
+
+  const getFrequencyLabel = (f: 'daily' | 'weekly' | 'monthly') =>
+    f === 'daily' ? '每日' : f === 'weekly' ? '每周' : '每月';
+
+  const toggleSubEnabled = (id: string) => {
+    setSubscriptions(prev => prev.map(s => s.id === id ? { ...s, enabled: !s.enabled } : s));
+  };
+
+  const toggleSubModule = (key: string) => {
+    setSubModules(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleSubFormat = (f: 'pdf' | 'excel') => {
+    setSubFormats(prev => {
+      const next = new Set(prev);
+      if (next.has(f)) next.delete(f);
+      else next.add(f);
+      return next;
+    });
+  };
+
+  const startNewSub = () => {
+    setEditingSub(null);
+    setSubModules(new Set());
+    setSubRecipients('');
+    setSubFrequency('daily');
+    setSubFormats(new Set(['pdf']));
+    setSubEnabled(true);
+  };
+
+  const startEditSub = (sub: SubscriptionConfig) => {
+    setEditingSub(sub);
+    setSubModules(new Set(sub.modules));
+    setSubRecipients(sub.recipients.join(', '));
+    setSubFrequency(sub.frequency);
+    setSubFormats(new Set(sub.formats));
+    setSubEnabled(sub.enabled);
+  };
+
+  const cancelEdit = () => {
+    setEditingSub(null);
+    setSubModules(new Set());
+    setSubRecipients('');
+    setSubFrequency('daily');
+    setSubFormats(new Set(['pdf']));
+    setSubEnabled(true);
+  };
+
+  const saveSubscription = () => {
+    if (subModules.size === 0 || !subRecipients.trim() || subFormats.size === 0) return;
+    const recipients = subRecipients.split(',').map(r => r.trim()).filter(Boolean);
+    if (editingSub) {
+      setSubscriptions(prev => prev.map(s => s.id === editingSub.id ? {
+        ...s,
+        modules: Array.from(subModules),
+        recipients,
+        frequency: subFrequency,
+        formats: Array.from(subFormats),
+        enabled: subEnabled,
+      } : s));
+    } else {
+      const newSub: SubscriptionConfig = {
+        id: `SUB${String(subscriptions.length + 1).padStart(3, '0')}`,
+        modules: Array.from(subModules),
+        recipients,
+        frequency: subFrequency,
+        formats: Array.from(subFormats),
+        enabled: subEnabled,
+        createdAt: new Date().toISOString(),
+      };
+      setSubscriptions(prev => [...prev, newSub]);
+    }
+    cancelEdit();
+  };
+
+  const sendNow = (id: string) => {
+    const sub = subscriptions.find(s => s.id === id);
+    if (!sub || !sub.enabled) return;
+    alert(`已触发订阅 ${id} 立即发送`);
+  };
 
   return (
     <div className="flex flex-col gap-4 h-full overflow-y-auto">
@@ -81,6 +222,18 @@ export default function Reports() {
         <StatCard label="平均成本偏差" value={avgCostDev} unit="%" />
         <StatCard label="风险事件总数" value={totalRisk} />
       </div>
+
+      {selectedModules.size === 0 && (
+        <div className="glass-card p-4 border-amber-warn/50 bg-amber-warn/10">
+          <div className="text-amber-warn text-sm">⚠️ 请至少勾选一个日报模块</div>
+        </div>
+      )}
+
+      {showAlert && (
+        <div className="glass-card p-3 border-amber-warn/50 bg-amber-warn/10">
+          <div className="text-amber-warn text-sm">请先至少选择一个模块</div>
+        </div>
+      )}
 
       {hasModule('category') && (
         <div className="glass-card p-4">
@@ -261,9 +414,181 @@ export default function Reports() {
         </div>
       )}
 
+      <div className="glass-card p-4">
+        <h3 className="section-title mb-4">定时订阅配置</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-medium text-white">现有订阅</h4>
+              <button onClick={startNewSub} className="btn-ghost text-xs px-3 py-1">新建订阅</button>
+            </div>
+            <div className="space-y-2">
+              {subscriptions.map(sub => (
+                <div key={sub.id} className="bg-deep-bg/40 rounded-lg p-3 border border-deep-border/30">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-neon-cyan text-sm">{sub.id}</span>
+                      <span className="text-xs text-steel">{getFrequencyLabel(sub.frequency)}</span>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <span className="text-xs text-steel">{sub.enabled ? '已启用' : '已停用'}</span>
+                      <input
+                        type="checkbox"
+                        checked={sub.enabled}
+                        onChange={() => toggleSubEnabled(sub.id)}
+                        className="accent-neon-cyan w-4 h-4"
+                      />
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {sub.formats.map(f => (
+                      <span key={f} className="px-2 py-0.5 rounded text-xs bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20">
+                        {f.toUpperCase()}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => startEditSub(sub)} className="btn-ghost text-xs px-3 py-1">编辑</button>
+                    {sub.enabled && (
+                      <button onClick={() => sendNow(sub.id)} className="btn-primary text-xs px-3 py-1">立即发送</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <h4 className="text-sm font-medium text-white mb-3">
+              {editingSub ? `编辑订阅 ${editingSub.id}` : '新建订阅'}
+            </h4>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-steel mb-1 block">选择模块</label>
+                <div className="flex flex-wrap gap-3">
+                  {MODULE_CONFIG.map(m => (
+                    <label key={m.key} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={subModules.has(m.key)}
+                        onChange={() => toggleSubModule(m.key)}
+                        className="accent-neon-cyan w-4 h-4"
+                      />
+                      <span className={subModules.has(m.key) ? 'text-white' : 'text-steel'}>{m.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-steel mb-1 block">收件人（逗号分隔）</label>
+                <textarea
+                  value={subRecipients}
+                  onChange={(e) => setSubRecipients(e.target.value)}
+                  className="input-field h-16 resize-none"
+                  placeholder="email1@company.com, email2@company.com"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-steel mb-1 block">发送频率</label>
+                <div className="flex gap-4">
+                  {(['daily', 'weekly', 'monthly'] as const).map(f => (
+                    <label key={f} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <input
+                        type="radio"
+                        name="frequency"
+                        checked={subFrequency === f}
+                        onChange={() => setSubFrequency(f)}
+                        className="accent-neon-cyan w-4 h-4"
+                      />
+                      <span className={subFrequency === f ? 'text-white' : 'text-steel'}>{getFrequencyLabel(f)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-steel mb-1 block">导出格式</label>
+                <div className="flex gap-4">
+                  {(['pdf', 'excel'] as const).map(f => (
+                    <label key={f} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={subFormats.has(f)}
+                        onChange={() => toggleSubFormat(f)}
+                        className="accent-neon-cyan w-4 h-4"
+                      />
+                      <span className={subFormats.has(f) ? 'text-white' : 'text-steel'}>{f.toUpperCase()}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={subEnabled}
+                    onChange={(e) => setSubEnabled(e.target.checked)}
+                    className="accent-neon-cyan w-4 h-4"
+                  />
+                  <span className={subEnabled ? 'text-white' : 'text-steel'}>启用订阅</span>
+                </label>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={saveSubscription} className="btn-primary text-xs px-4 py-2">保存订阅</button>
+                <button onClick={cancelEdit} className="btn-ghost text-xs px-4 py-2">取消</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="glass-card p-4">
+        <h3 className="section-title mb-3">发送记录</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-steel text-xs">
+                <th className="text-left py-2 px-3">发送时间</th>
+                <th className="text-left py-2 px-3">订阅ID</th>
+                <th className="text-left py-2 px-3">模块数量</th>
+                <th className="text-left py-2 px-3">格式</th>
+                <th className="text-left py-2 px-3">收件人数</th>
+                <th className="text-left py-2 px-3">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRecords.map(r => (
+                <tr key={r.id} className="border-t border-deep-border/30">
+                  <td className="py-2 px-3 font-mono text-steel text-xs">{r.sentAt.replace('T', ' ')}</td>
+                  <td className="py-2 px-3 font-mono text-neon-cyan">{r.subscriptionId}</td>
+                  <td className="py-2 px-3 text-white">{r.modules.length}</td>
+                  <td className="py-2 px-3 text-white">{r.formats.map(f => f.toUpperCase()).join(', ')}</td>
+                  <td className="py-2 px-3 text-white">{r.recipients.length}</td>
+                  <td className="py-2 px-3">
+                    <span className={r.status === 'success' ? 'risk-badge-normal' : 'risk-badge-severe'}>
+                      {r.status === 'success' ? '成功' : '失败'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div className="flex gap-3">
-        <button className="btn-primary" onClick={() => exportDailyReportPDF(mockDailyReport, { modules: modulesList })}>导出PDF</button>
-        <button className="btn-ghost" onClick={() => exportDailyReportExcel(mockDailyReport, { modules: modulesList })}>导出Excel</button>
+        <button
+          className={`btn-primary ${selectedModules.size === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+          onClick={() => handleExport('pdf')}
+          disabled={selectedModules.size === 0}
+        >
+          导出PDF
+        </button>
+        <button
+          className={`btn-ghost ${selectedModules.size === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+          onClick={() => handleExport('excel')}
+          disabled={selectedModules.size === 0}
+        >
+          导出Excel
+        </button>
       </div>
     </div>
   );

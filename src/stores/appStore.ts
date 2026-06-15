@@ -61,12 +61,14 @@ interface AppState {
   createApprovalForPlan: (planId: string) => void;
   approveItem: (id: string) => void;
   rejectItem: (id: string) => void;
+  finalizeApproval: (approvalId: string, nextStatus: 'approved' | 'executing') => void;
   checkAndEscalate: () => void;
   updatePlanStatus: (id: string, status: EmergencyPlan['status']) => void;
   getAlertsByLevel: (level: RiskLevel) => AlertItem[];
   getPlansByAlert: (alertId: string) => EmergencyPlan[];
   getApprovalsByPlan: (planId: string) => ApprovalItem[];
   getPlanApprovals: (planId: string) => ApprovalItem[];
+  getLatestApprovalForPlan: (planId: string) => ApprovalItem | null;
   getPlanFlowRecords: (planId: string) => ApprovalFlowRecord[];
   getRelatedEvents: (eventId: string) => RiskEvent[];
   generatePlansForAlert: (alert: AlertItem) => EmergencyPlan[];
@@ -105,7 +107,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!plan) return;
 
     const existing = state.approvals.filter((a) => a.planId === planId);
-    if (existing.length > 0) return;
+    if (existing.length > 0) {
+      const firstStage = existing.find((a) => a.type === 'procurement_review');
+      if (!firstStage || firstStage.status !== 'pending') return;
+      return;
+    }
 
     const now = new Date().toISOString();
     const newApproval: ApprovalItem = {
@@ -169,37 +175,36 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const nextType = NEXT_APPROVAL_TYPE[approval.type];
     if (nextType) {
-      const newApproval: ApprovalItem = {
-        id: generateId('APR'),
-        planId: approval.planId,
-        type: nextType,
-        applicant: approval.applicant,
-        summary: approval.summary,
-        costImpact: approval.costImpact,
-        urgency: approval.urgency,
-        submittedAt: now,
-        deadline: addHours(now, 12),
-        status: 'pending',
-        currentApprover: APPROVER_MAP[nextType],
-      };
-      newApprovals.push(newApproval);
-
-      const pendingRecord: ApprovalFlowRecord = {
-        id: generateId('FR'),
-        approvalId: newApproval.id,
-        type: newApproval.type,
-        approver: newApproval.currentApprover,
-        action: 'pending',
-        timestamp: now,
-        comment: '提交审批',
-      };
-      newFlowRecords.push(pendingRecord);
-    }
-
-    if (approval.type === 'legal_review') {
-      newPlans = state.emergencyPlans.map((p) =>
-        p.id === approval.planId ? { ...p, status: 'approved' as const } : p
+      const existingNext = state.approvals.find(
+        (a) => a.planId === approval.planId && a.type === nextType
       );
+      if (!existingNext) {
+        const newApproval: ApprovalItem = {
+          id: generateId('APR'),
+          planId: approval.planId,
+          type: nextType,
+          applicant: approval.applicant,
+          summary: approval.summary,
+          costImpact: approval.costImpact,
+          urgency: approval.urgency,
+          submittedAt: now,
+          deadline: addHours(now, 12),
+          status: 'pending',
+          currentApprover: APPROVER_MAP[nextType],
+        };
+        newApprovals.push(newApproval);
+
+        const pendingRecord: ApprovalFlowRecord = {
+          id: generateId('FR'),
+          approvalId: newApproval.id,
+          type: newApproval.type,
+          approver: newApproval.currentApprover,
+          action: 'pending',
+          timestamp: now,
+          comment: '提交审批',
+        };
+        newFlowRecords.push(pendingRecord);
+      }
     }
 
     set({ approvals: newApprovals, flowRecords: newFlowRecords, emergencyPlans: newPlans });
@@ -226,6 +231,78 @@ export const useAppStore = create<AppState>((set, get) => ({
         a.id === id ? { ...a, status: 'rejected' as const } : a
       ),
       flowRecords: [...state.flowRecords, rejectedRecord],
+    });
+  },
+
+  finalizeApproval: (approvalId, nextStatus) => {
+    const state = get();
+    const approval = state.approvals.find((a) => a.id === approvalId);
+    if (!approval || approval.type !== 'legal_review') return;
+
+    const now = new Date().toISOString();
+    const newFlowRecords = [...state.flowRecords];
+
+    const alreadyApproved = state.flowRecords.find(
+      (r) => r.approvalId === approvalId && r.action === 'approved'
+    );
+    if (!alreadyApproved) {
+      const approvedRecord: ApprovalFlowRecord = {
+        id: generateId('FR'),
+        approvalId: approval.id,
+        type: approval.type,
+        approver: approval.currentApprover,
+        action: 'approved',
+        timestamp: now,
+        comment: '审批通过',
+      };
+      newFlowRecords.push(approvedRecord);
+    }
+
+    const finalRecord: ApprovalFlowRecord = {
+      id: generateId('FR'),
+      approvalId: approval.id,
+      type: approval.type,
+      approver: approval.currentApprover,
+      action: 'approved',
+      timestamp: now,
+      comment: nextStatus === 'approved' ? '终审通过，方案已批准' : '终审通过，启动执行流程',
+    };
+    newFlowRecords.push(finalRecord);
+
+    if (nextStatus === 'executing') {
+      const step1Record: ApprovalFlowRecord = {
+        id: generateId('FR'),
+        approvalId: approval.id,
+        type: approval.type,
+        approver: '系统',
+        action: 'approved',
+        timestamp: now,
+        comment: '执行步骤1：方案评估 - 已完成',
+      };
+      const step2Record: ApprovalFlowRecord = {
+        id: generateId('FR'),
+        approvalId: approval.id,
+        type: approval.type,
+        approver: '系统',
+        action: 'pending',
+        timestamp: now,
+        comment: '执行步骤2：成本复核 - 进行中',
+      };
+      newFlowRecords.push(step1Record, step2Record);
+    }
+
+    const updatedApprovals = state.approvals.map((a) =>
+      a.id === approvalId ? { ...a, status: 'approved' as const } : a
+    );
+
+    const updatedPlans = state.emergencyPlans.map((p) =>
+      p.id === approval.planId ? { ...p, status: nextStatus } : p
+    );
+
+    set({
+      approvals: updatedApprovals,
+      flowRecords: newFlowRecords,
+      emergencyPlans: updatedPlans,
     });
   },
 
@@ -297,6 +374,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     get()
       .approvals.filter((a) => a.planId === planId)
       .sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()),
+  getLatestApprovalForPlan: (planId) => {
+    const planApprovals = get().approvals.filter((a) => a.planId === planId);
+    if (planApprovals.length === 0) return null;
+    const pending = planApprovals.find(
+      (a) => a.status === 'pending' || a.status === 'escalated'
+    );
+    if (pending) return pending;
+    return [...planApprovals].sort(
+      (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+    )[0];
+  },
   getPlanFlowRecords: (planId) => {
     const state = get();
     const planApprovalIds = state.approvals.filter((a) => a.planId === planId).map((a) => a.id);

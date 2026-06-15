@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { mockRiskPaths, mockThresholds, mockThresholdHistory, mockThresholdVersions } from '@/mock/data';
-import type { RiskPath, ThresholdConfig, RiskLevel, ThresholdChangeRecord } from '@/types';
+import { mockRiskPaths, mockThresholds, mockThresholdHistory, mockThresholdVersions, mockSupplyRecords } from '@/mock/data';
+import type { RiskPath, ThresholdConfig, RiskLevel, ThresholdChangeRecord, ThresholdVersion } from '@/types';
 import { getLevelLabel, getLevelBadgeClass, getRiskIndexColor, formatDateTime, formatDate } from '@/utils/format';
 import RiskRadarChart from '@/components/charts/RiskRadarChart';
 
@@ -14,6 +14,8 @@ const DIM_ITEMS: { key: keyof RiskPath['dimensions']; label: string; weight: num
 ];
 
 const FIELD_LABEL: Record<'warning' | 'severe' | 'critical', string> = { warning: '预警', severe: '严重', critical: '紧急' };
+
+const LEVEL_ORDER: RiskLevel[] = ['normal', 'warning', 'severe', 'critical'];
 
 function calcStatus(index: number, config: ThresholdConfig | undefined): RiskLevel {
   if (!config) {
@@ -135,24 +137,47 @@ function ThresholdTable({ configs, onChange, readOnly }: { configs: ThresholdCon
   );
 }
 
+interface SimulationResult {
+  upgraded: number;
+  downgraded: number;
+  riskDelta: number;
+  affectedAmount: number;
+  changedPaths: {
+    path: RiskPath;
+    oldStatus: RiskLevel;
+    newStatus: RiskLevel;
+    changeType: 'upgrade' | 'downgrade';
+    oldThreshold: number;
+    newThreshold: number;
+  }[];
+}
+
 export default function RiskMonitor() {
   const [selectedId, setSelectedId] = useState(mockRiskPaths[0].id);
   const [thresholds, setThresholds] = useState<ThresholdConfig[]>(mockThresholds);
   const [history, setHistory] = useState<ThresholdChangeRecord[]>(mockThresholdHistory);
   const [viewingVersionId, setViewingVersionId] = useState<string | null>(null);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [sandboxCollapsed, setSandboxCollapsed] = useState(false);
+  const [sandboxConfigs, setSandboxConfigs] = useState<ThresholdConfig[]>(mockThresholds.map((c) => ({ ...c })));
+  const [localVersions, setLocalVersions] = useState<ThresholdVersion[]>([]);
+  const [simulationRan, setSimulationRan] = useState(false);
+  const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+
+  const allVersions = useMemo(() => [...localVersions, ...mockThresholdVersions], [localVersions]);
 
   const displayConfigs = useMemo(() => {
     if (viewingVersionId) {
-      const v = mockThresholdVersions.find((x) => x.id === viewingVersionId);
+      const v = allVersions.find((x) => x.id === viewingVersionId);
       return v ? v.configs : thresholds;
     }
     return thresholds;
-  }, [viewingVersionId, thresholds]);
+  }, [viewingVersionId, thresholds, allVersions]);
 
   const riskPaths = useMemo(() => computePaths(displayConfigs), [displayConfigs]);
   const selected = riskPaths.find((p) => p.id === selectedId) ?? riskPaths[0];
-  const viewingVersion = viewingVersionId ? mockThresholdVersions.find((v) => v.id === viewingVersionId) : null;
+  const viewingVersion = viewingVersionId ? allVersions.find((v) => v.id === viewingVersionId) : null;
 
   const handleThresholdChange = (i: number, field: 'warning' | 'severe' | 'critical', v: number) => {
     if (viewingVersionId) return;
@@ -171,6 +196,74 @@ export default function RiskMonitor() {
     }, ...prev]);
   };
 
+  const handleSandboxChange = (i: number, field: 'warning' | 'severe' | 'critical', v: number) => {
+    setSandboxConfigs((prev) => prev.map((c, idx) => idx === i ? { ...c, [field]: v } : c));
+    setSimulationRan(false);
+  };
+
+  const resetSandbox = () => {
+    setSandboxConfigs(thresholds.map((c) => ({ ...c })));
+    setSimulationRan(false);
+    setSimulationResult(null);
+  };
+
+  const runSimulation = () => {
+    const currentPaths = computePaths(thresholds);
+    const sandboxPaths = computePaths(sandboxConfigs);
+    const changedPaths: SimulationResult['changedPaths'] = [];
+
+    currentPaths.forEach((cp, idx) => {
+      const sp = sandboxPaths[idx];
+      if (cp.status !== sp.status) {
+        const oldIdx = LEVEL_ORDER.indexOf(cp.status);
+        const newIdx = LEVEL_ORDER.indexOf(sp.status);
+        const pathCategory = extractCategory(cp.name);
+        const oldConfig = thresholds.find((c) => c.category === pathCategory);
+        const newConfig = sandboxConfigs.find((c) => c.category === pathCategory);
+        changedPaths.push({
+          path: sp,
+          oldStatus: cp.status,
+          newStatus: sp.status,
+          changeType: newIdx > oldIdx ? 'upgrade' : 'downgrade',
+          oldThreshold: oldConfig?.severe ?? 70,
+          newThreshold: newConfig?.severe ?? 70,
+        });
+      }
+    });
+
+    const upgraded = changedPaths.filter((p) => p.changeType === 'upgrade').length;
+    const downgraded = changedPaths.filter((p) => p.changeType === 'downgrade').length;
+
+    const currentRiskCount = currentPaths.filter((p) => p.status !== 'normal').length;
+    const sandboxRiskCount = sandboxPaths.filter((p) => p.status !== 'normal').length;
+    const riskDelta = sandboxRiskCount - currentRiskCount;
+
+    const affectedCategories = changedPaths.map((p) => extractCategory(p.path.name));
+    const affectedAmount = mockSupplyRecords
+      .filter((r) => affectedCategories.includes(r.category))
+      .reduce((sum, r) => sum + r.cost, 0);
+
+    setSimulationResult({ upgraded, downgraded, riskDelta, affectedAmount, changedPaths });
+    setSimulationRan(true);
+  };
+
+  const applySandboxAndCreateVersion = () => {
+    if (!simulationRan) return;
+    const snapshot = sandboxConfigs.map((c) => ({ ...c }));
+    setThresholds(snapshot);
+    const newVersion: ThresholdVersion = {
+      id: `V1.${mockThresholdVersions.length + localVersions.length}`,
+      name: `沙盘模拟应用-${formatDate(new Date().toISOString())}`,
+      createdAt: new Date().toISOString(),
+      configs: snapshot,
+      operator: '当前用户',
+    };
+    setLocalVersions((prev) => [newVersion, ...prev]);
+    setShowSuccessBanner(true);
+    setTimeout(() => setShowSuccessBanner(false), 4000);
+    setSimulationRan(false);
+  };
+
   return (
     <div className="p-6 h-full flex flex-col gap-6">
       {viewingVersion && (
@@ -179,6 +272,12 @@ export default function RiskMonitor() {
             正在查看历史版本 <span className="font-bold text-white">{viewingVersion.id}</span> - {viewingVersion.name} ({formatDate(viewingVersion.createdAt)})
           </span>
           <button className="btn-ghost text-xs" onClick={() => setViewingVersionId(null)}>返回当前版本</button>
+        </div>
+      )}
+      {showSuccessBanner && (
+        <div className="glass-card p-3 flex items-center justify-between border border-neon-cyan/50 bg-neon-cyan/10">
+          <span className="text-sm text-neon-cyan">阈值已应用，新版本已生成！</span>
+          <button className="btn-ghost text-xs" onClick={() => setShowSuccessBanner(false)}>关闭</button>
         </div>
       )}
       <div className="flex gap-6 flex-1 min-h-0">
@@ -208,6 +307,96 @@ export default function RiskMonitor() {
       <div className="glass-card p-5 flex-shrink-0">
         <h3 className="section-title mb-4">{viewingVersionId ? '历史阈值配置（只读）' : '阈值配置'}</h3>
         <ThresholdTable configs={displayConfigs} onChange={handleThresholdChange} readOnly={!!viewingVersionId} />
+      </div>
+      <div className="glass-card p-5 flex-shrink-0">
+        <div className="flex items-center justify-between mb-4 cursor-pointer" onClick={() => setSandboxCollapsed(!sandboxCollapsed)}>
+          <h3 className="section-title mb-0">阈值模拟沙盘</h3>
+          <span className="text-xs text-steel">{sandboxCollapsed ? '展开 ▼' : '收起 ▲'}</span>
+        </div>
+        {!sandboxCollapsed && (
+          <div className="space-y-4">
+            <ThresholdTable configs={sandboxConfigs} onChange={handleSandboxChange} />
+            <div className="flex gap-3">
+              <button className="btn-primary text-sm" onClick={runSimulation}>开始模拟</button>
+              <button className="btn-ghost text-sm" onClick={resetSandbox}>重置为当前值</button>
+              <button
+                className="btn-primary text-sm"
+                onClick={applySandboxAndCreateVersion}
+                disabled={!simulationRan}
+              >
+                确认应用并生成版本
+              </button>
+            </div>
+            {simulationRan && simulationResult && (
+              <div className="glass-card p-4 space-y-4">
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="glass-card-hover p-3 border border-deep-border/50 bg-deep-bg/30">
+                    <div className="text-xs text-steel mb-1">路径升级数量</div>
+                    <div className="text-2xl font-bold" style={{ color: '#ff0040' }}>{simulationResult.upgraded}</div>
+                  </div>
+                  <div className="glass-card-hover p-3 border border-deep-border/50 bg-deep-bg/30">
+                    <div className="text-xs text-steel mb-1">路径降级数量</div>
+                    <div className="text-2xl font-bold" style={{ color: '#00f5d4' }}>{simulationResult.downgraded}</div>
+                  </div>
+                  <div className="glass-card-hover p-3 border border-deep-border/50 bg-deep-bg/30">
+                    <div className="text-xs text-steel mb-1">风险数量变化</div>
+                    <div className="text-2xl font-bold" style={{ color: '#ff6b35' }}>
+                      {simulationResult.riskDelta > 0 ? `+${simulationResult.riskDelta}` : simulationResult.riskDelta}
+                    </div>
+                  </div>
+                  <div className="glass-card-hover p-3 border border-deep-border/50 bg-deep-bg/30">
+                    <div className="text-xs text-steel mb-1">受影响订单金额</div>
+                    <div className="text-2xl font-bold text-white">¥{(simulationResult.affectedAmount / 10000).toFixed(0)}万</div>
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium text-white mb-3">变化路径列表</h4>
+                  <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-deep-bg/90">
+                        <tr className="text-steel border-b border-deep-border/50">
+                          <th className="py-2 text-left">路径名称</th>
+                          <th className="py-2 text-center">当前等级</th>
+                          <th className="py-2 text-center">模拟后等级</th>
+                          <th className="py-2 text-center">变化</th>
+                          <th className="py-2 text-center">当前阈值</th>
+                          <th className="py-2 text-center">模拟阈值</th>
+                          <th className="py-2 text-center">风险指数</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {simulationResult.changedPaths.map((cp) => (
+                          <tr
+                            key={cp.path.id}
+                            className={`border-b border-deep-border/30 ${
+                              cp.changeType === 'upgrade' ? 'bg-[#ff0040]/5' : 'bg-[#00f5d4]/5'
+                            }`}
+                          >
+                            <td className="py-2 text-white">{cp.path.name}</td>
+                            <td className="py-2 text-center">
+                              <span className={getLevelBadgeClass(cp.oldStatus)}>{getLevelLabel(cp.oldStatus)}</span>
+                            </td>
+                            <td className="py-2 text-center">
+                              <span className={getLevelBadgeClass(cp.newStatus)}>{getLevelLabel(cp.newStatus)}</span>
+                            </td>
+                            <td className="py-2 text-center" style={{ color: cp.changeType === 'upgrade' ? '#ff0040' : '#00f5d4' }}>
+                              {cp.changeType === 'upgrade' ? '升级' : '降级'}
+                            </td>
+                            <td className="py-2 text-center text-slate-dim font-mono">{cp.oldThreshold}</td>
+                            <td className="py-2 text-center text-slate-dim font-mono">{cp.newThreshold}</td>
+                            <td className="py-2 text-center font-mono" style={{ color: getRiskIndexColor(cp.path.compositeIndex) }}>
+                              {cp.path.compositeIndex}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="glass-card p-5 flex-shrink-0">
         <div className="flex items-center justify-between mb-4 cursor-pointer" onClick={() => setHistoryCollapsed(!historyCollapsed)}>
@@ -250,7 +439,7 @@ export default function RiskMonitor() {
             <div>
               <h4 className="text-sm font-medium text-white mb-3">版本管理</h4>
               <div className="space-y-2 max-h-64 overflow-y-auto">
-                {mockThresholdVersions.map((v) => (
+                {allVersions.map((v) => (
                   <div key={v.id} className={`p-3 rounded-lg border ${viewingVersionId === v.id ? 'border-neon-cyan/60 bg-neon-cyan/5' : 'border-deep-border/50 bg-deep-bg/30'}`}>
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">

@@ -20,8 +20,10 @@ export default function Emergency() {
     generatePlansForAlert,
     generateStepsForPlan,
     getPlanApprovals,
+    getLatestApprovalForPlan,
     getPlanFlowRecords,
     createApprovalForPlan,
+    finalizeApproval,
   } = useAppStore();
 
   const triggerAlert = useMemo(
@@ -64,14 +66,18 @@ export default function Emergency() {
     [activePlan, getPlanFlowRecords]
   );
 
-  const currentApproval = useMemo(() => {
-    const pending = planApprovals.find((a) => a.status === 'pending' || a.status === 'escalated');
-    if (pending) return pending;
-    const latestApproved = [...planApprovals]
-      .filter((a) => a.status === 'approved')
-      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())[0];
-    return latestApproved || planApprovals[planApprovals.length - 1] || null;
-  }, [planApprovals]);
+  const currentApproval = useMemo(
+    () => (activePlan ? getLatestApprovalForPlan(activePlan.id) : null),
+    [activePlan, getLatestApprovalForPlan]
+  );
+
+  const showFinalizeDialog = useMemo(() => {
+    if (!activePlan || planApprovals.length === 0) return false;
+    const legalApproved = planApprovals.find(
+      (a) => a.type === 'legal_review' && a.status === 'approved'
+    );
+    return !!legalApproved && activePlan.status === 'under_review';
+  }, [activePlan, planApprovals]);
 
   const flowIconConfig: Record<string, { icon: React.ElementType; color: string; glow: string }> = {
     approved: { icon: CheckCircle, color: 'text-neon-cyan', glow: 'shadow-[0_0_8px_rgba(0,245,212,0.4)]' },
@@ -185,6 +191,25 @@ export default function Emergency() {
           ) : (
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-3">
+                {showFinalizeDialog && currentApproval && (
+                  <div className="p-4 rounded-lg bg-neon-cyan/10 border border-neon-cyan/30">
+                    <p className="text-sm text-white font-medium mb-3">终审已通过，请选择下一步</p>
+                    <div className="flex gap-3">
+                      <button
+                        className="btn-ghost flex-1"
+                        onClick={() => finalizeApproval(currentApproval.id, 'approved')}
+                      >
+                        标记为已批准
+                      </button>
+                      <button
+                        className="btn-primary flex-1"
+                        onClick={() => finalizeApproval(currentApproval.id, 'executing')}
+                      >
+                        直接启动执行
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {currentApproval && (
                   <div className="p-4 rounded-lg bg-deep-bg/40 border border-deep-border/30">
                     <div className="flex items-center justify-between mb-3">
