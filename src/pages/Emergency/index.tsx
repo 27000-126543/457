@@ -1,15 +1,28 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { AlertTriangle, History } from 'lucide-react';
+import { AlertTriangle, History, CheckCircle, Loader, XCircle, ArrowUpCircle } from 'lucide-react';
 import { useAppStore } from '@/stores/appStore';
 import { mockExecutionSteps, mockRiskEvents } from '@/mock/data';
-import { getLevelColor, getLevelLabel, getLevelBadgeClass, formatDateTime } from '@/utils/format';
+import { getLevelColor, getLevelLabel, getLevelBadgeClass, formatDateTime, getApprovalTypeLabel, getPlanStatusLabel } from '@/utils/format';
 import PlanCard from '@/components/cards/PlanCard';
 import ExecutionTimeline from '@/components/ui/ExecutionTimeline';
 import clsx from 'clsx';
+import type { ApprovalFlowRecord, ApprovalStatus } from '@/types';
 
 export default function Emergency() {
-  const { alerts, emergencyPlans, selectedAlertId, selectedPlanId, setSelectedAlert, setSelectedPlan, generatePlansForAlert, generateStepsForPlan } = useAppStore();
+  const {
+    alerts,
+    emergencyPlans,
+    selectedAlertId,
+    selectedPlanId,
+    setSelectedAlert,
+    setSelectedPlan,
+    generatePlansForAlert,
+    generateStepsForPlan,
+    getPlanApprovals,
+    getPlanFlowRecords,
+    createApprovalForPlan,
+  } = useAppStore();
 
   const triggerAlert = useMemo(
     () => alerts.find((a) => a.id === selectedAlertId) ?? alerts[0],
@@ -40,6 +53,62 @@ export default function Emergency() {
     if (direct.length > 0) return direct;
     return mockRiskEvents.filter((e) => e.category === triggerAlert.category).slice(0, 2);
   }, [activePlan, triggerAlert]);
+
+  const planApprovals = useMemo(
+    () => (activePlan ? getPlanApprovals(activePlan.id) : []),
+    [activePlan, getPlanApprovals]
+  );
+
+  const planFlowRecords = useMemo(
+    () => (activePlan ? getPlanFlowRecords(activePlan.id) : []),
+    [activePlan, getPlanFlowRecords]
+  );
+
+  const currentApproval = useMemo(() => {
+    const pending = planApprovals.find((a) => a.status === 'pending' || a.status === 'escalated');
+    if (pending) return pending;
+    const latestApproved = [...planApprovals]
+      .filter((a) => a.status === 'approved')
+      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())[0];
+    return latestApproved || planApprovals[planApprovals.length - 1] || null;
+  }, [planApprovals]);
+
+  const flowIconConfig: Record<string, { icon: React.ElementType; color: string; glow: string }> = {
+    approved: { icon: CheckCircle, color: 'text-neon-cyan', glow: 'shadow-[0_0_8px_rgba(0,245,212,0.4)]' },
+    pending: { icon: Loader, color: 'text-amber-warn', glow: 'shadow-[0_0_8px_rgba(255,107,53,0.5)]' },
+    rejected: { icon: XCircle, color: 'text-rose-critical', glow: 'shadow-[0_0_8px_rgba(255,0,64,0.4)]' },
+    escalated: { icon: ArrowUpCircle, color: 'text-amber-warn', glow: 'shadow-[0_0_8px_rgba(255,107,53,0.5)]' },
+  };
+
+  const statusBadgeClass = (status: ApprovalStatus | string) => {
+    switch (status) {
+      case 'approved':
+        return 'risk-badge-normal';
+      case 'pending':
+        return 'risk-badge-warning';
+      case 'rejected':
+        return 'risk-badge-severe';
+      case 'escalated':
+        return 'risk-badge-warning';
+      default:
+        return 'bg-slate-dim/20 text-slate-dim border-slate-dim/30';
+    }
+  };
+
+  const statusLabel = (status: ApprovalStatus | string) => {
+    switch (status) {
+      case 'approved':
+        return '已通过';
+      case 'pending':
+        return '待审批';
+      case 'rejected':
+        return '已驳回';
+      case 'escalated':
+        return '已升级';
+      default:
+        return status;
+    }
+  };
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
@@ -90,6 +159,159 @@ export default function Emergency() {
           ))}
         </div>
       </div>
+
+      {activePlan && (
+        <motion.div
+          key={`approval-${activePlan.id}`}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass-card p-5"
+        >
+          <h3 className="section-title mb-4 flex items-center gap-2">
+            <CheckCircle size={16} className="text-neon-cyan" />
+            审批协同状态
+          </h3>
+
+          {planApprovals.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 space-y-3">
+              <p className="text-slate-dim text-sm">尚未提交审批</p>
+              <button
+                className="btn-primary"
+                onClick={() => createApprovalForPlan(activePlan.id)}
+              >
+                提交审批
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-3">
+                {currentApproval && (
+                  <div className="p-4 rounded-lg bg-deep-bg/40 border border-deep-border/30">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs text-slate-dim">当前阶段</span>
+                      <span className={clsx('px-2 py-0.5 rounded-full text-xs font-medium border', statusBadgeClass(currentApproval.status))}>
+                        {statusLabel(currentApproval.status)}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-neon-cyan" />
+                        <span className="text-sm text-white font-medium">
+                          {getApprovalTypeLabel(currentApproval.type)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-dim">审批人</span>
+                        <span className="text-steel">{currentApproval.currentApprover}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-dim">截止时间</span>
+                        <span className="text-steel font-mono">{formatDateTime(currentApproval.deadline)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-dim">方案状态</span>
+                        <span className="text-neon-cyan font-medium">{getPlanStatusLabel(activePlan.status)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-dim mb-2">审批流程阶段</p>
+                  {(['procurement_review', 'finance_review', 'legal_review'] as const).map((type, idx) => {
+                    const stageApproval = planApprovals.find((a) => a.type === type);
+                    const stageStatus = stageApproval?.status || 'pending';
+                    const isActive = stageApproval && (stageApproval.status === 'pending' || stageApproval.status === 'escalated');
+                    return (
+                      <div key={type} className="flex items-center gap-3">
+                        <div className={clsx(
+                          'w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono',
+                          stageStatus === 'approved'
+                            ? 'bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40'
+                            : isActive
+                            ? 'bg-amber-warn/20 text-amber-warn border border-amber-warn/40'
+                            : stageStatus === 'rejected'
+                            ? 'bg-rose-critical/20 text-rose-critical border border-rose-critical/40'
+                            : 'bg-slate-dim/20 text-slate-dim border border-slate-dim/30'
+                        )}>
+                          {idx + 1}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between">
+                            <span className={clsx(
+                              'text-sm',
+                              stageStatus === 'approved' ? 'text-neon-cyan' : isActive ? 'text-amber-warn' : stageStatus === 'rejected' ? 'text-rose-critical' : 'text-steel'
+                            )}>
+                              {getApprovalTypeLabel(type)}
+                            </span>
+                            {stageApproval && (
+                              <span className={clsx('text-xs px-1.5 py-0.5 rounded border', statusBadgeClass(stageApproval.status))}>
+                                {statusLabel(stageApproval.status)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-dim mb-3">审批流转记录</p>
+                <div className="relative pl-6 max-h-[280px] overflow-y-auto pr-2">
+                  {planFlowRecords.map((record: ApprovalFlowRecord, idx: number) => {
+                    const cfg = flowIconConfig[record.action] || flowIconConfig.pending;
+                    const Icon = cfg.icon;
+                    const isLast = idx === planFlowRecords.length - 1;
+
+                    return (
+                      <div key={record.id} className="relative pb-5">
+                        {!isLast && (
+                          <div
+                            className={clsx(
+                              'absolute left-[-18px] top-[22px] w-0.5 h-[calc(100%-10px)]',
+                              record.action === 'approved' ? 'bg-neon-cyan/40' : 'bg-deep-border/60'
+                            )}
+                          />
+                        )}
+                        <div className="absolute left-[-24px] top-0">
+                          <div className={clsx(
+                            'w-[20px] h-[20px] rounded-full flex items-center justify-center bg-deep-bg border-2',
+                            cfg.color.replace('text-', 'border-'),
+                            cfg.glow
+                          )}>
+                            <Icon
+                              size={11}
+                              className={clsx(cfg.color, (record.action === 'pending' || record.action === 'escalated') && 'animate-spin')}
+                            />
+                          </div>
+                        </div>
+                        <div className="ml-1">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="text-sm text-white font-medium">{record.approver}</span>
+                            <span className={clsx('text-xs px-1.5 py-0.5 rounded border', statusBadgeClass(record.action))}>
+                              {statusLabel(record.action)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-slate-dim mb-0.5">
+                            <span>{getApprovalTypeLabel(record.type)}</span>
+                            <span>·</span>
+                            <span className="font-mono">{formatDateTime(record.timestamp)}</span>
+                          </div>
+                          {record.comment && (
+                            <p className="text-xs text-steel">{record.comment}</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
 
       <div className="grid grid-cols-2 gap-6">
         <motion.div

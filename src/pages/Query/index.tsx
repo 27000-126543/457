@@ -1,22 +1,32 @@
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import * as XLSX from 'xlsx';
-import { mockSupplyRecords, mockSuppliers } from '@/mock/data';
+import { mockSupplyRecords, mockSuppliers, mockRiskEvents, mockAlerts } from '@/mock/data';
 import type { RiskLevel, SupplyChainRecord } from '@/types';
-import { formatDate, getLevelLabel } from '@/utils/format';
+import { formatDate, getLevelLabel, getPlanTypeLabel, getPlanStatusLabel, getApprovalTypeLabel } from '@/utils/format';
+import { useAppStore } from '@/stores/appStore';
 
 const CATEGORIES = ['半导体', '纺织品', '汽车零部件', '钢材', '显示面板', '硅晶圆', '铁矿石', '农产品'] as const;
 const RISK_LEVELS: RiskLevel[] = ['warning', 'severe', 'critical'];
 const MILESTONES = ['订单', '生产', '运输', '交付'] as const;
-
 type SortKey = 'supplier' | 'category' | 'orderDate' | 'deliveryDate' | 'cost';
 type ViewMode = 'table' | 'timeline';
 
-function getRecordRiskLevel(record: SupplyChainRecord): RiskLevel {
-  if (record.status === '延迟风险' || record.riskEvents.length >= 2) return 'critical';
-  if (record.riskEvents.length === 1) return 'severe';
-  if (record.status === '生产中') return 'warning';
+function getRecordRiskLevel(r: SupplyChainRecord): RiskLevel {
+  if (r.status === '延迟风险' || r.riskEvents.length >= 2) return 'critical';
+  if (r.riskEvents.length === 1) return 'severe';
+  if (r.status === '生产中') return 'warning';
   return 'normal';
+}
+function getApprovalStatusLabel(s: string): string {
+  return s === 'pending' ? '待审批' : s === 'approved' ? '已批准' : s === 'rejected' ? '已驳回' : '已升级';
+}
+function getTimestamp(): string {
+  const d = new Date(), p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+function emptyS3(rid: string): Record<string, string> {
+  return { '记录ID': rid, '关联告警': '', '告警等级': '', '应急方案': '', '方案类型': '', '方案状态': '', '审批节点': '', '审批人': '', '审批状态': '', '截止时间': '' };
 }
 
 export default function Query() {
@@ -29,11 +39,13 @@ export default function Query() {
   const [sortAsc, setSortAsc] = useState(true);
   const [view, setView] = useState<ViewMode>('table');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const emergencyPlans = useAppStore(s => s.emergencyPlans);
+  const approvals = useAppStore(s => s.approvals);
 
-  const toggleCat = (c: string) => setCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
-  const toggleRisk = (r: RiskLevel) => setRiskLevels(prev => prev.includes(r) ? prev.filter(x => x !== r) : [...prev, r]);
-  const toggleRow = (id: string) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const toggleAll = () => setSelected(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(r => r.id)));
+  const toggleCat = (c: string) => setCategories(p => p.includes(c) ? p.filter(x => x !== c) : [...p, c]);
+  const toggleRisk = (r: RiskLevel) => setRiskLevels(p => p.includes(r) ? p.filter(x => x !== r) : [...p, r]);
+  const toggleRow = (id: string) => setSelected(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSelected(p => p.size === filtered.length ? new Set() : new Set(filtered.map(r => r.id)));
 
   const filtered = useMemo(() => {
     let data = [...mockSupplyRecords];
@@ -49,39 +61,53 @@ export default function Query() {
     return data;
   }, [supplier, categories, dateStart, dateEnd, riskLevels, sortKey, sortAsc]);
 
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) setSortAsc(p => !p);
-    else { setSortKey(key); setSortAsc(true); }
-  };
+  const handleSort = (key: SortKey) => { if (sortKey === key) setSortAsc(p => !p); else { setSortKey(key); setSortAsc(true); } };
 
   const handleExport = () => {
     if (selected.size === 0) return;
     const records = mockSupplyRecords.filter(r => selected.has(r.id));
-    const rows = records.map(r => ({
-      '供应商': r.supplier,
-      '品类': r.category,
-      '订单日期': formatDate(r.orderDate),
-      '交付日期': formatDate(r.deliveryDate),
-      '状态': r.status,
-      '风险事件数': r.riskEvents.length,
-      '金额(元)': r.cost,
-      '路径': r.path.join(' → '),
-    }));
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const rows = records.map(r => ({ '供应商': r.supplier, '品类': r.category, '订单日期': formatDate(r.orderDate), '交付日期': formatDate(r.deliveryDate), '状态': r.status, '风险事件数': r.riskEvents.length, '金额(元)': r.cost, '路径': r.path.join(' → ') }));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '查询结果');
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    XLSX.writeFile(wb, `supply-chain-query-${ts}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '查询结果');
+    XLSX.writeFile(wb, `supply-chain-query-${getTimestamp()}.xlsx`);
+  };
+
+  const handleExportReviewPackage = () => {
+    if (selected.size === 0) return;
+    const records = mockSupplyRecords.filter(r => selected.has(r.id));
+    const s1 = records.map(r => ({ '记录ID': r.id, '供应商': r.supplier, '品类': r.category, '订单日期': formatDate(r.orderDate), '交付日期': formatDate(r.deliveryDate), '当前状态': r.status, '订单金额(元)': r.cost, '物流路径': r.path.join(' → '), '风险等级': getLevelLabel(getRecordRiskLevel(r)) }));
+    const s2: Record<string, string | number>[] = [];
+    records.forEach(r => {
+      if (r.riskEvents.length === 0) { s2.push({ '记录ID': r.id, '供应商': r.supplier, '事件ID': '', '事件日期': '', '风险类型': '无风险事件', '严重程度%': '', '处置方案': '', '处理时长(h)': '' }); return; }
+      r.riskEvents.forEach(eid => {
+        const evt = mockRiskEvents.find(e => e.id === eid);
+        if (evt) s2.push({ '记录ID': r.id, '供应商': r.supplier, '事件ID': evt.id, '事件日期': formatDate(evt.date), '风险类型': evt.riskType, '严重程度%': evt.severity, '处置方案': evt.resolution, '处理时长(h)': evt.resolutionTime });
+      });
+    });
+    const s3: Record<string, string>[] = [];
+    records.forEach(r => {
+      const al = mockAlerts.filter(a => a.supplier === r.supplier);
+      if (al.length === 0) { s3.push(emptyS3(r.id)); return; }
+      al.forEach(a => {
+        const pl = emergencyPlans.filter(p => p.triggerAlertId === a.id);
+        if (pl.length === 0) { s3.push({ ...emptyS3(r.id), '关联告警': a.message, '告警等级': getLevelLabel(a.level) }); return; }
+        pl.forEach(p => {
+          const ap = approvals.filter(x => x.planId === p.id);
+          if (ap.length === 0) { s3.push({ ...emptyS3(r.id), '关联告警': a.message, '告警等级': getLevelLabel(a.level), '应急方案': p.title, '方案类型': getPlanTypeLabel(p.type), '方案状态': getPlanStatusLabel(p.status) }); return; }
+          ap.forEach(ar => s3.push({ '记录ID': r.id, '关联告警': a.message, '告警等级': getLevelLabel(a.level), '应急方案': p.title, '方案类型': getPlanTypeLabel(p.type), '方案状态': getPlanStatusLabel(p.status), '审批节点': getApprovalTypeLabel(ar.type), '审批人': ar.currentApprover, '审批状态': getApprovalStatusLabel(ar.status), '截止时间': formatDate(ar.deadline) }));
+        });
+      });
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s1), '基础信息');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s2), '风险事件');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s3), '处理进度');
+    XLSX.writeFile(wb, `supply-chain-review-pack-${getTimestamp()}.xlsx`);
   };
 
   const SortHeader = ({ label, field }: { label: string; field: SortKey }) => (
-    <th className="text-left py-2 px-3 cursor-pointer select-none hover:text-neon-cyan" onClick={() => handleSort(field)}>
-      {label} {sortKey === field ? (sortAsc ? '↑' : '↓') : ''}
-    </th>
+    <th className="text-left py-2 px-3 cursor-pointer select-none hover:text-neon-cyan" onClick={() => handleSort(field)}>{label} {sortKey === field ? (sortAsc ? '↑' : '↓') : ''}</th>
   );
-
   const statusColor = (s: string) => s === '延迟风险' ? 'text-rose-critical' : s === '运输中' ? 'text-neon-cyan' : 'text-amber-warn';
 
   return (
@@ -98,9 +124,7 @@ export default function Query() {
           <div className="w-64">
             <label className="text-xs text-steel block mb-1">品类</label>
             <div className="flex flex-wrap gap-2">{CATEGORIES.map(c => (
-              <label key={c} className="flex items-center gap-1 text-xs cursor-pointer">
-                <input type="checkbox" checked={categories.includes(c)} onChange={() => toggleCat(c)} className="accent-neon-cyan" />{c}
-              </label>
+              <label key={c} className="flex items-center gap-1 text-xs cursor-pointer"><input type="checkbox" checked={categories.includes(c)} onChange={() => toggleCat(c)} className="accent-neon-cyan" />{c}</label>
             ))}</div>
           </div>
           <div className="flex gap-2 items-end">
@@ -110,37 +134,25 @@ export default function Query() {
           <div>
             <label className="text-xs text-steel block mb-1">风险等级</label>
             <div className="flex gap-2">{RISK_LEVELS.map(r => (
-              <label key={r} className="flex items-center gap-1 text-xs cursor-pointer">
-                <input type="checkbox" checked={riskLevels.includes(r)} onChange={() => toggleRisk(r)} className="accent-neon-cyan" />{getLevelLabel(r)}
-              </label>
+              <label key={r} className="flex items-center gap-1 text-xs cursor-pointer"><input type="checkbox" checked={riskLevels.includes(r)} onChange={() => toggleRisk(r)} className="accent-neon-cyan" />{getLevelLabel(r)}</label>
             ))}</div>
           </div>
           <button className="btn-primary">搜索</button>
         </div>
       </div>
-
       <div className="flex items-center gap-3">
         <h2 className="section-title">查询结果</h2>
-        <div className="flex gap-1">
-          {(['table', 'timeline'] as ViewMode[]).map(m => (
-            <button key={m} onClick={() => setView(m)} className={`px-3 py-1 rounded-lg text-xs ${view === m ? 'btn-primary' : 'btn-ghost'}`}>{m === 'table' ? '表格' : '时间线'}</button>
-          ))}
-        </div>
+        <div className="flex gap-1">{(['table', 'timeline'] as ViewMode[]).map(m => (
+          <button key={m} onClick={() => setView(m)} className={`px-3 py-1 rounded-lg text-xs ${view === m ? 'btn-primary' : 'btn-ghost'}`}>{m === 'table' ? '表格' : '时间线'}</button>
+        ))}</div>
       </div>
-
       {view === 'table' ? (
         <div className="glass-card p-4 overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-steel text-xs">
               <th className="py-2 px-3"><input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={toggleAll} className="accent-neon-cyan" /></th>
-              <SortHeader label="供应商" field="supplier" />
-              <SortHeader label="品类" field="category" />
-              <SortHeader label="订单日期" field="orderDate" />
-              <SortHeader label="交付日期" field="deliveryDate" />
-              <th className="text-left py-2 px-3">状态</th>
-              <th className="text-left py-2 px-3">风险事件</th>
-              <SortHeader label="金额" field="cost" />
-              <th className="text-left py-2 px-3">路径</th>
+              <SortHeader label="供应商" field="supplier" /><SortHeader label="品类" field="category" /><SortHeader label="订单日期" field="orderDate" /><SortHeader label="交付日期" field="deliveryDate" />
+              <th className="text-left py-2 px-3">状态</th><th className="text-left py-2 px-3">风险事件</th><SortHeader label="金额" field="cost" /><th className="text-left py-2 px-3">路径</th>
             </tr></thead>
             <tbody>{filtered.map(r => (
               <tr key={r.id} className="border-t border-deep-border/30 hover:bg-white/5">
@@ -158,32 +170,28 @@ export default function Query() {
           </table>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          {filtered.map(r => (
-            <motion.div key={r.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="glass-card p-4">
-              <div className="flex justify-between mb-3">
-                <span className="text-sm font-medium text-white">{r.supplier} · {r.category}</span>
-                <span className={`text-xs ${statusColor(r.status)}`}>{r.status}</span>
-              </div>
-              <div className="flex items-center gap-0">
-                {MILESTONES.map((ms, i) => {
-                  const active = i <= (r.status === '延迟风险' ? 2 : r.status === '运输中' ? 2 : r.status === '生产中' ? 1 : 3);
-                  return (
-                    <div key={ms} className="flex items-center flex-1">
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${active ? 'bg-neon-cyan/30 text-neon-cyan border border-neon-cyan' : 'bg-deep-bg text-slate-dim border border-deep-border'}`}>{i + 1}</div>
-                      <span className={`text-xs ml-1.5 ${active ? 'text-white' : 'text-slate-dim'}`}>{ms}</span>
-                      {i < MILESTONES.length - 1 && <div className={`flex-1 h-px mx-2 ${active ? 'bg-neon-cyan/40' : 'bg-deep-border'}`} />}
-                    </div>
-                  );
-                })}
-              </div>
-            </motion.div>
-          ))}
-        </div>
+        <div className="flex flex-col gap-3">{filtered.map(r => (
+          <motion.div key={r.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="glass-card p-4">
+            <div className="flex justify-between mb-3">
+              <span className="text-sm font-medium text-white">{r.supplier} · {r.category}</span>
+              <span className={`text-xs ${statusColor(r.status)}`}>{r.status}</span>
+            </div>
+            <div className="flex items-center gap-0">{MILESTONES.map((ms, i) => {
+              const active = i <= (r.status === '延迟风险' ? 2 : r.status === '运输中' ? 2 : r.status === '生产中' ? 1 : 3);
+              return (
+                <div key={ms} className="flex items-center flex-1">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${active ? 'bg-neon-cyan/30 text-neon-cyan border border-neon-cyan' : 'bg-deep-bg text-slate-dim border border-deep-border'}`}>{i + 1}</div>
+                  <span className={`text-xs ml-1.5 ${active ? 'text-white' : 'text-slate-dim'}`}>{ms}</span>
+                  {i < MILESTONES.length - 1 && <div className={`flex-1 h-px mx-2 ${active ? 'bg-neon-cyan/40' : 'bg-deep-border'}`} />}
+                </div>
+              );
+            })}</div>
+          </motion.div>
+        ))}</div>
       )}
-
       <div className="flex gap-3">
         <button className="btn-primary" onClick={handleExport} disabled={selected.size === 0}>导出选中项</button>
+        <button className="btn-primary" onClick={handleExportReviewPackage} disabled={selected.size === 0}>生成风险复盘包</button>
         <span className="text-xs text-steel self-center">已选择 {selected.size} / {filtered.length} 条</span>
       </div>
     </div>

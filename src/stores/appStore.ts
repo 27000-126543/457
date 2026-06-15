@@ -58,6 +58,7 @@ interface AppState {
   toggleSidebar: () => void;
   addFlowRecord: (record: ApprovalFlowRecord) => void;
   addEscalationLog: (log: EscalationLog) => void;
+  createApprovalForPlan: (planId: string) => void;
   approveItem: (id: string) => void;
   rejectItem: (id: string) => void;
   checkAndEscalate: () => void;
@@ -65,6 +66,8 @@ interface AppState {
   getAlertsByLevel: (level: RiskLevel) => AlertItem[];
   getPlansByAlert: (alertId: string) => EmergencyPlan[];
   getApprovalsByPlan: (planId: string) => ApprovalItem[];
+  getPlanApprovals: (planId: string) => ApprovalItem[];
+  getPlanFlowRecords: (planId: string) => ApprovalFlowRecord[];
   getRelatedEvents: (eventId: string) => RiskEvent[];
   generatePlansForAlert: (alert: AlertItem) => EmergencyPlan[];
   generateStepsForPlan: (planId: string) => ExecutionStep[];
@@ -96,6 +99,50 @@ export const useAppStore = create<AppState>((set, get) => ({
   addEscalationLog: (log) =>
     set((s) => ({ escalationLogs: [...s.escalationLogs, log] })),
 
+  createApprovalForPlan: (planId) => {
+    const state = get();
+    const plan = state.emergencyPlans.find((p) => p.id === planId);
+    if (!plan) return;
+
+    const existing = state.approvals.filter((a) => a.planId === planId);
+    if (existing.length > 0) return;
+
+    const now = new Date().toISOString();
+    const newApproval: ApprovalItem = {
+      id: generateId('APR'),
+      planId,
+      type: 'procurement_review',
+      applicant: '系统自动',
+      summary: plan.title,
+      costImpact: plan.costImpact,
+      urgency: 'urgent',
+      submittedAt: now,
+      deadline: addHours(now, 12),
+      status: 'pending',
+      currentApprover: APPROVER_MAP['procurement_review'],
+    };
+
+    const flowRecord: ApprovalFlowRecord = {
+      id: generateId('FR'),
+      approvalId: newApproval.id,
+      type: newApproval.type,
+      approver: newApproval.currentApprover,
+      action: 'pending',
+      timestamp: now,
+      comment: '提交审批',
+    };
+
+    const updatedPlans = state.emergencyPlans.map((p) =>
+      p.id === planId ? { ...p, status: 'under_review' as const } : p
+    );
+
+    set({
+      approvals: [...state.approvals, newApproval],
+      flowRecords: [...state.flowRecords, flowRecord],
+      emergencyPlans: updatedPlans,
+    });
+  },
+
   approveItem: (id) => {
     const state = get();
     const approval = state.approvals.find((a) => a.id === id);
@@ -118,6 +165,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     let newApprovals = [...updatedApprovals];
     let newFlowRecords = [...state.flowRecords, approvedRecord];
+    let newPlans = state.emergencyPlans;
 
     const nextType = NEXT_APPROVAL_TYPE[approval.type];
     if (nextType) {
@@ -148,7 +196,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       newFlowRecords.push(pendingRecord);
     }
 
-    set({ approvals: newApprovals, flowRecords: newFlowRecords });
+    if (approval.type === 'legal_review') {
+      newPlans = state.emergencyPlans.map((p) =>
+        p.id === approval.planId ? { ...p, status: 'approved' as const } : p
+      );
+    }
+
+    set({ approvals: newApprovals, flowRecords: newFlowRecords, emergencyPlans: newPlans });
   },
 
   rejectItem: (id) => {
@@ -239,6 +293,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   getAlertsByLevel: (level) => get().alerts.filter((a) => a.level === level),
   getPlansByAlert: (alertId) => get().emergencyPlans.filter((p) => p.triggerAlertId === alertId),
   getApprovalsByPlan: (planId) => get().approvals.filter((a) => a.planId === planId),
+  getPlanApprovals: (planId) =>
+    get()
+      .approvals.filter((a) => a.planId === planId)
+      .sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()),
+  getPlanFlowRecords: (planId) => {
+    const state = get();
+    const planApprovalIds = state.approvals.filter((a) => a.planId === planId).map((a) => a.id);
+    return state.flowRecords
+      .filter((r) => planApprovalIds.includes(r.approvalId))
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  },
   getRelatedEvents: (eventId) => {
     const event = get().riskEvents.find((e) => e.id === eventId);
     if (!event) return [];

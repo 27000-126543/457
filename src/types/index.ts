@@ -193,6 +193,24 @@ export interface ApprovalFlowRecord {
   comment?: string;
 }
 
+export interface ThresholdChangeRecord {
+  id: string;
+  category: string;
+  field: 'warning' | 'severe' | 'critical';
+  oldValue: number;
+  newValue: number;
+  operator: string;
+  changedAt: string;
+}
+
+export interface ThresholdVersion {
+  id: string;
+  name: string;
+  createdAt: string;
+  configs: ThresholdConfig[];
+  operator: string;
+}
+
 export interface AppStoreState {
   flowRecords: ApprovalFlowRecord[];
   escalationLogs: EscalationLog[];

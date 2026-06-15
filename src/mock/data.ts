@@ -2,7 +2,7 @@ import type {
   KPIMetrics, AlertItem, MapDataPoint, RiskPath, RiskTrendPoint,
   ThresholdConfig, EmergencyPlan, ExecutionStep, ApprovalItem,
   RiskEvent, DailyReport, SupplyChainRecord, Supplier, EscalationLog,
-  ApprovalFlowRecord
+  ApprovalFlowRecord, ThresholdChangeRecord, ThresholdVersion
 } from '@/types';
 
 export const mockKPI: KPIMetrics = {
@@ -272,4 +272,17 @@ export const mockFlowRecords: ApprovalFlowRecord[] = [
     id: 'FR006', approvalId: 'APR005', type: 'finance_review', approver: '李芳（财务审核）',
     action: 'escalated', timestamp: '2026-06-15T14:00:00', comment: '审批超时4小时未处理，自动升级',
   },
+];
+
+export const mockThresholdHistory: ThresholdChangeRecord[] = [
+  { id: 'TH001', category: '半导体', field: 'critical', oldValue: 75, newValue: 80, operator: '张伟（采购主管）', changedAt: '2026-06-10T14:30:00' },
+  { id: 'TH002', category: '半导体', field: 'severe', oldValue: 60, newValue: 65, operator: '张伟（采购主管）', changedAt: '2026-06-10T14:31:00' },
+  { id: 'TH003', category: '硅晶圆', field: 'warning', oldValue: 45, newValue: 50, operator: '李芳（财务审核）', changedAt: '2026-06-12T09:15:00' },
+  { id: 'TH004', category: '汽车零部件', field: 'critical', oldValue: 75, newValue: 78, operator: '王刚（法务合规）', changedAt: '2026-06-13T16:45:00' },
+  { id: 'TH005', category: '纺织品', field: 'severe', oldValue: 55, newValue: 60, operator: '张伟（采购主管）', changedAt: '2026-06-14T11:20:00' },
+];
+
+export const mockThresholdVersions: ThresholdVersion[] = [
+  { id: 'V1.0', name: '初始版本', createdAt: '2026-06-01T00:00:00', operator: '系统', configs: mockThresholds.map(c => ({ ...c, warning: c.warning - 5, severe: c.severe - 5, critical: c.critical - 5 })) },
+  { id: 'V1.1', name: '半导体阈值上调', createdAt: '2026-06-10T14:32:00', operator: '张伟（采购主管）', configs: mockThresholds.map(c => c.category === '半导体' ? c : { ...c }) },
 ];
