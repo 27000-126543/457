@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/stores/appStore';
 import { getApprovalTypeLabel, getUrgencyLabel, formatDateTime } from '@/utils/format';
-import type { Urgency, ApprovalFlowRecord } from '@/types';
+import type { Urgency, ApprovalFlowRecord, ApprovalType } from '@/types';
 import ApprovalEfficiencyChart from '@/components/charts/ApprovalEfficiencyChart';
 
 const URGENCY_ORDER: Record<Urgency, number> = { critical: 0, urgent: 1, normal: 2 };
@@ -45,6 +45,7 @@ export default function Approval() {
   } = useAppStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [slaFilter, setSlaFilter] = useState<ApprovalType | null>(null);
 
   useEffect(() => {
     checkAndEscalate();
@@ -63,7 +64,8 @@ export default function Approval() {
   };
 
   const pending = approvals.filter((a) => a.status === 'pending' || a.status === 'escalated');
-  const sorted = [...pending].sort(
+  const filtered = slaFilter ? pending.filter((a) => a.type === slaFilter) : pending;
+  const sorted = [...filtered].sort(
     (a, b) => URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency]
   );
   const selected = approvals.find((a) => a.id === selectedId) ?? null;
@@ -96,6 +98,32 @@ export default function Approval() {
     ? escalationLogs.filter((e) => e.approvalId === selected.id)
     : [];
 
+  const slaData = useMemo(() => {
+    const types: ApprovalType[] = ['procurement_review', 'finance_review', 'legal_review'];
+    return types.map((type) => {
+      const typePending = pending.filter((a) => a.type === type);
+      const overdue = typePending.filter((a) => isOverdue(a.deadline));
+      const typeApproved = approvals.filter((a) => a.type === type && a.status === 'approved');
+      const durations: number[] = [];
+      typeApproved.forEach((a) => {
+        const records = flowRecords.filter((fr) => fr.approvalId === a.id);
+        const pendingRec = records.find((r) => r.action === 'pending');
+        const approvedRec = records.find((r) => r.action === 'approved');
+        if (pendingRec && approvedRec) {
+          const ms = new Date(approvedRec.timestamp).getTime() - new Date(pendingRec.timestamp).getTime();
+          durations.push(ms / 3600000);
+        }
+      });
+      const avgHours = durations.length > 0
+        ? (durations.reduce((s, v) => s + v, 0) / durations.length).toFixed(1)
+        : null;
+      const escalationCount = flowRecords.filter(
+        (fr) => fr.type === type && fr.action === 'escalated'
+      ).length;
+      return { type, pendingCount: typePending.length, overdueCount: overdue.length, avgHours, escalationCount };
+    });
+  }, [pending, approvals, flowRecords, now]);
+
   return (
     <div className="p-6 space-y-6 min-h-screen">
       <div className="grid grid-cols-4 gap-4">
@@ -110,6 +138,56 @@ export default function Approval() {
             <div className={`stat-value ${s.color}`}>{s.value}</div>
           </div>
         ))}
+      </div>
+
+      <div>
+        <div className="flex items-center gap-3 mb-3">
+          <h2 className="section-title">审批 SLA 看板</h2>
+          {slaFilter && (
+            <button className="btn-ghost text-xs" onClick={() => setSlaFilter(null)}>
+              清除筛选
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          {slaData.map((s) => (
+            <div
+              key={s.type}
+              className={`glass-card p-4 cursor-pointer transition-all ${
+                slaFilter === s.type ? 'ring-1 ring-neon-cyan/40' : ''
+              }`}
+              onClick={() => setSlaFilter(slaFilter === s.type ? null : s.type)}
+            >
+              <div className="text-neon-cyan text-sm font-medium mb-3">
+                {getApprovalTypeLabel(s.type)}
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-steel text-xs">待办数</span>
+                  <span className="text-white text-sm font-mono">{s.pendingCount}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-steel text-xs">超期数</span>
+                  <span className={`text-sm font-mono ${s.overdueCount > 0 ? 'text-rose-critical' : 'text-white'}`}>
+                    {s.overdueCount}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-steel text-xs">平均处理时长</span>
+                  <span className="text-white text-sm font-mono">
+                    {s.avgHours !== null ? `${s.avgHours}h` : '-'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-steel text-xs">升级次数</span>
+                  <span className={`text-sm font-mono ${s.escalationCount > 0 ? 'text-amber-warn' : 'text-white'}`}>
+                    {s.escalationCount}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-12 gap-6">

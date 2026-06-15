@@ -50,12 +50,23 @@ interface AppState {
   selectedPathId: string | null;
   selectedEventId: string | null;
   sidebarCollapsed: boolean;
+  thresholdVersionSnapshot: {
+    appliedAt: string | null;
+    versionName: string;
+    riskIndexBefore: number;
+    riskIndexAfter: number;
+    alertCountBefore: number;
+    alertCountAfter: number;
+    affectedAmount: number;
+    changedPaths: { id: string; name: string; category: string; oldStatus: RiskLevel; newStatus: RiskLevel }[];
+  } | null;
 
   setSelectedAlert: (id: string | null) => void;
   setSelectedPlan: (id: string | null) => void;
   setSelectedPath: (id: string | null) => void;
   setSelectedEvent: (id: string | null) => void;
   toggleSidebar: () => void;
+  setThresholdVersionSnapshot: (snapshot: AppState['thresholdVersionSnapshot']) => void;
   addFlowRecord: (record: ApprovalFlowRecord) => void;
   addEscalationLog: (log: EscalationLog) => void;
   createApprovalForPlan: (planId: string) => void;
@@ -88,12 +99,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedPathId: null,
   selectedEventId: null,
   sidebarCollapsed: false,
+  thresholdVersionSnapshot: null,
 
   setSelectedAlert: (id) => set({ selectedAlertId: id }),
   setSelectedPlan: (id) => set({ selectedPlanId: id }),
   setSelectedPath: (id) => set({ selectedPathId: id }),
   setSelectedEvent: (id) => set({ selectedEventId: id }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setThresholdVersionSnapshot: (snapshot) => set({ thresholdVersionSnapshot: snapshot }),
 
   addFlowRecord: (record) =>
     set((s) => ({ flowRecords: [...s.flowRecords, record] })),

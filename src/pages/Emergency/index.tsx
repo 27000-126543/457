@@ -20,7 +20,6 @@ export default function Emergency() {
     generatePlansForAlert,
     generateStepsForPlan,
     getPlanApprovals,
-    getLatestApprovalForPlan,
     getPlanFlowRecords,
     createApprovalForPlan,
     finalizeApproval,
@@ -66,10 +65,23 @@ export default function Emergency() {
     [activePlan, getPlanFlowRecords]
   );
 
-  const currentApproval = useMemo(
-    () => (activePlan ? getLatestApprovalForPlan(activePlan.id) : null),
-    [activePlan, getLatestApprovalForPlan]
-  );
+  const currentApproval = useMemo(() => {
+    if (!activePlan) return null;
+    const allPlanApprovals = getPlanApprovals(activePlan.id);
+    const escalated = allPlanApprovals.find(a => a.status === 'escalated');
+    if (escalated) return escalated;
+    const pendingApprovals = allPlanApprovals.filter(a => a.status === 'pending');
+    if (pendingApprovals.length > 0) {
+      const typeOrder: Record<string, number> = { procurement_review: 0, finance_review: 1, legal_review: 2 };
+      return pendingApprovals.sort((a, b) => typeOrder[b.type] - typeOrder[a.type])[0];
+    }
+    const approved = allPlanApprovals.filter(a => a.status === 'approved');
+    if (approved.length > 0) {
+      const typeOrder: Record<string, number> = { procurement_review: 0, finance_review: 1, legal_review: 2 };
+      return approved.sort((a, b) => typeOrder[b.type] - typeOrder[a.type])[0];
+    }
+    return allPlanApprovals[allPlanApprovals.length - 1] || null;
+  }, [activePlan, getPlanApprovals]);
 
   const showFinalizeDialog = useMemo(() => {
     if (!activePlan || planApprovals.length === 0) return false;
@@ -246,28 +258,34 @@ export default function Emergency() {
                   {(['procurement_review', 'finance_review', 'legal_review'] as const).map((type, idx) => {
                     const stageApproval = planApprovals.find((a) => a.type === type);
                     const stageStatus = stageApproval?.status || 'pending';
-                    const isActive = stageApproval && (stageApproval.status === 'pending' || stageApproval.status === 'escalated');
+                    const isEscalated = stageStatus === 'escalated';
+                    const isActive = stageApproval && (stageApproval.status === 'pending' || isEscalated);
                     return (
                       <div key={type} className="flex items-center gap-3">
                         <div className={clsx(
                           'w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono',
                           stageStatus === 'approved'
                             ? 'bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40'
+                            : isEscalated
+                            ? 'bg-amber-warn/20 text-amber-warn border border-amber-warn/40'
                             : isActive
                             ? 'bg-amber-warn/20 text-amber-warn border border-amber-warn/40'
                             : stageStatus === 'rejected'
                             ? 'bg-rose-critical/20 text-rose-critical border border-rose-critical/40'
                             : 'bg-slate-dim/20 text-slate-dim border border-slate-dim/30'
                         )}>
-                          {idx + 1}
+                          {isEscalated ? <ArrowUpCircle size={14} /> : idx + 1}
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center justify-between">
                             <span className={clsx(
                               'text-sm',
-                              stageStatus === 'approved' ? 'text-neon-cyan' : isActive ? 'text-amber-warn' : stageStatus === 'rejected' ? 'text-rose-critical' : 'text-steel'
+                              stageStatus === 'approved' ? 'text-neon-cyan' : isEscalated ? 'text-amber-warn' : isActive ? 'text-amber-warn' : stageStatus === 'rejected' ? 'text-rose-critical' : 'text-steel'
                             )}>
                               {getApprovalTypeLabel(type)}
+                              {isEscalated && stageApproval?.currentApprover && (
+                                <span className="text-amber-warn ml-1">→ {stageApproval.currentApprover}</span>
+                              )}
                             </span>
                             {stageApproval && (
                               <span className={clsx('text-xs px-1.5 py-0.5 rounded border', statusBadgeClass(stageApproval.status))}>

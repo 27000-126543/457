@@ -61,6 +61,7 @@ export default function Reports() {
     new Set(MODULE_CONFIG.filter(m => m.defaultChecked).map(m => m.key))
   );
   const [subscriptions, setSubscriptions] = useState<SubscriptionConfig[]>(mockSubscriptions);
+  const [sendRecords, setSendRecords] = useState<SendRecord[]>(mockSendRecords);
   const [editingSub, setEditingSub] = useState<SubscriptionConfig | null>(null);
   const [subModules, setSubModules] = useState<Set<string>>(new Set());
   const [subRecipients, setSubRecipients] = useState('');
@@ -68,6 +69,7 @@ export default function Reports() {
   const [subFormats, setSubFormats] = useState<Set<'pdf' | 'excel'>>(new Set(['pdf']));
   const [subEnabled, setSubEnabled] = useState(true);
   const [showAlert, setShowAlert] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const { categorySummaries, trendData } = mockDailyReport;
 
   const filtered = useMemo(() => trendData.slice(-range), [trendData, range]);
@@ -77,8 +79,8 @@ export default function Reports() {
   const totalRisk = categorySummaries.reduce((s, c) => s + c.riskEventCount, 0);
 
   const sortedRecords = useMemo(
-    () => [...mockSendRecords].sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime()).slice(0, 10),
-    []
+    () => [...sendRecords].sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime()).slice(0, 10),
+    [sendRecords]
   );
 
   const toggleModule = (key: ModuleKey) => {
@@ -115,6 +117,7 @@ export default function Reports() {
   };
 
   const toggleSubModule = (key: string) => {
+    setValidationErrors([]);
     setSubModules(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -124,6 +127,7 @@ export default function Reports() {
   };
 
   const toggleSubFormat = (f: 'pdf' | 'excel') => {
+    setValidationErrors([]);
     setSubFormats(prev => {
       const next = new Set(prev);
       if (next.has(f)) next.delete(f);
@@ -160,7 +164,21 @@ export default function Reports() {
   };
 
   const saveSubscription = () => {
-    if (subModules.size === 0 || !subRecipients.trim() || subFormats.size === 0) return;
+    const errors: string[] = [];
+    if (subModules.size === 0) errors.push('请至少选择一个模块');
+    if (!subRecipients.trim()) errors.push('请填写收件人');
+    else {
+      const emails = subRecipients.split(',').map(r => r.trim()).filter(Boolean);
+      if (emails.length === 0) errors.push('请填写有效的收件人邮箱');
+    }
+    if (subFormats.size === 0) errors.push('请至少选择一种导出格式');
+
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      return;
+    }
+
+    setValidationErrors([]);
     const recipients = subRecipients.split(',').map(r => r.trim()).filter(Boolean);
     if (editingSub) {
       setSubscriptions(prev => prev.map(s => s.id === editingSub.id ? {
@@ -189,7 +207,16 @@ export default function Reports() {
   const sendNow = (id: string) => {
     const sub = subscriptions.find(s => s.id === id);
     if (!sub || !sub.enabled) return;
-    alert(`已触发订阅 ${id} 立即发送`);
+    const newRecord: SendRecord = {
+      id: `SR${String(sendRecords.length + 1).padStart(3, '0')}`,
+      subscriptionId: id,
+      sentAt: new Date().toISOString(),
+      modules: sub.modules,
+      formats: sub.formats,
+      recipients: sub.recipients,
+      status: 'success',
+    };
+    setSendRecords(prev => [newRecord, ...prev]);
   };
 
   return (
@@ -482,7 +509,7 @@ export default function Reports() {
                 <label className="text-xs text-steel mb-1 block">收件人（逗号分隔）</label>
                 <textarea
                   value={subRecipients}
-                  onChange={(e) => setSubRecipients(e.target.value)}
+                  onChange={(e) => { setSubRecipients(e.target.value); setValidationErrors([]); }}
                   className="input-field h-16 resize-none"
                   placeholder="email1@company.com, email2@company.com"
                 />
@@ -535,6 +562,13 @@ export default function Reports() {
                 <button onClick={saveSubscription} className="btn-primary text-xs px-4 py-2">保存订阅</button>
                 <button onClick={cancelEdit} className="btn-ghost text-xs px-4 py-2">取消</button>
               </div>
+              {validationErrors.length > 0 && (
+                <div className="border border-rose-critical/50 bg-rose-critical/10 rounded-lg p-3">
+                  {validationErrors.map((error, i) => (
+                    <div key={i} className="text-rose-critical text-xs">⚠️ {error}</div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

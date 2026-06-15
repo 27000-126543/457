@@ -4,6 +4,7 @@ import { mockRiskPaths, mockThresholds, mockThresholdHistory, mockThresholdVersi
 import type { RiskPath, ThresholdConfig, RiskLevel, ThresholdChangeRecord, ThresholdVersion } from '@/types';
 import { getLevelLabel, getLevelBadgeClass, getRiskIndexColor, formatDateTime, formatDate } from '@/utils/format';
 import RiskRadarChart from '@/components/charts/RiskRadarChart';
+import { useAppStore } from '@/stores/appStore';
 
 const DIM_ITEMS: { key: keyof RiskPath['dimensions']; label: string; weight: number }[] = [
   { key: 'supplierReputation', label: '供应商信誉', weight: 20 },
@@ -249,11 +250,41 @@ export default function RiskMonitor() {
 
   const applySandboxAndCreateVersion = () => {
     if (!simulationRan) return;
+    const currentPaths = computePaths(thresholds);
+    const sandboxPaths = computePaths(sandboxConfigs);
+    const riskIndexBefore = currentPaths.reduce((s, p) => s + p.compositeIndex, 0) / currentPaths.length;
+    const riskIndexAfter = sandboxPaths.reduce((s, p) => s + p.compositeIndex, 0) / sandboxPaths.length;
+    const alertCountBefore = currentPaths.filter((p) => LEVEL_ORDER.indexOf(p.status) >= LEVEL_ORDER.indexOf('warning')).length;
+    const alertCountAfter = sandboxPaths.filter((p) => LEVEL_ORDER.indexOf(p.status) >= LEVEL_ORDER.indexOf('warning')).length;
+    const changedPaths = currentPaths
+      .map((cp, idx) => {
+        const sp = sandboxPaths[idx];
+        if (cp.status !== sp.status) {
+          return { id: cp.id, name: cp.name, category: extractCategory(cp.name), oldStatus: cp.status, newStatus: sp.status };
+        }
+        return null;
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+    const affectedCategories = changedPaths.map((p) => p.category);
+    const affectedAmount = mockSupplyRecords
+      .filter((r) => affectedCategories.includes(r.category))
+      .reduce((sum, r) => sum + r.cost, 0);
+    const versionName = `沙盘模拟应用-${formatDate(new Date().toISOString())}`;
     const snapshot = sandboxConfigs.map((c) => ({ ...c }));
+    useAppStore.getState().setThresholdVersionSnapshot({
+      appliedAt: new Date().toISOString(),
+      versionName,
+      riskIndexBefore: Math.round(riskIndexBefore * 10) / 10,
+      riskIndexAfter: Math.round(riskIndexAfter * 10) / 10,
+      alertCountBefore,
+      alertCountAfter,
+      affectedAmount,
+      changedPaths,
+    });
     setThresholds(snapshot);
     const newVersion: ThresholdVersion = {
       id: `V1.${mockThresholdVersions.length + localVersions.length}`,
-      name: `沙盘模拟应用-${formatDate(new Date().toISOString())}`,
+      name: versionName,
       createdAt: new Date().toISOString(),
       configs: snapshot,
       operator: '当前用户',
