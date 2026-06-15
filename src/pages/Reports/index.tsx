@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { mockDailyReport } from '@/mock/data';
 import { getRiskIndexColor } from '@/utils/format';
+import { exportDailyReportPDF, exportDailyReportExcel } from '@/utils/exporters';
 
 const RANGES = [7, 30, 90] as const;
 
@@ -98,8 +99,8 @@ export default function Reports() {
       </div>
 
       <div className="flex gap-3">
-        <button className="btn-primary" onClick={() => alert('导出PDF功能开发中')}>导出PDF</button>
-        <button className="btn-ghost" onClick={() => alert('导出Excel功能开发中')}>导出Excel</button>
+        <button className="btn-primary" onClick={() => exportDailyReportPDF(mockDailyReport)}>导出PDF</button>
+        <button className="btn-ghost" onClick={() => exportDailyReportExcel(mockDailyReport)}>导出Excel</button>
       </div>
     </div>
   );

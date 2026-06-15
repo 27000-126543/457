@@ -1,7 +1,8 @@
 import type {
   KPIMetrics, AlertItem, MapDataPoint, RiskPath, RiskTrendPoint,
   ThresholdConfig, EmergencyPlan, ExecutionStep, ApprovalItem,
-  RiskEvent, DailyReport, SupplyChainRecord, Supplier, EscalationLog
+  RiskEvent, DailyReport, SupplyChainRecord, Supplier, EscalationLog,
+  ApprovalFlowRecord
 } from '@/types';
 
 export const mockKPI: KPIMetrics = {
@@ -244,4 +245,31 @@ export const mockSupplyRecords: SupplyChainRecord[] = [
   { id: 'REC006', supplier: '日本信越化学', category: '硅晶圆', orderDate: '2026-05-10', deliveryDate: '2026-06-15', status: '延迟风险', riskEvents: ['EVT2026-002'], cost: 5200000, path: ['东京', '大连'] },
   { id: 'REC007', supplier: '巴西淡水河谷', category: '铁矿石', orderDate: '2026-05-28', deliveryDate: '2026-07-10', status: '已发货', riskEvents: [], cost: 950000, path: ['里约热内卢', '上海'] },
   { id: 'REC008', supplier: '泰国正大集团', category: '农产品', orderDate: '2026-06-03', deliveryDate: '2026-06-17', status: '运输中', riskEvents: [], cost: 320000, path: ['曼谷', '广州'] },
+];
+
+export const mockFlowRecords: ApprovalFlowRecord[] = [
+  {
+    id: 'FR001', approvalId: 'APR003', type: 'finance_review', approver: '李芳（财务审核）',
+    action: 'pending', timestamp: '2026-06-15T07:05:00', comment: '提交审批',
+  },
+  {
+    id: 'FR002', approvalId: 'APR003', type: 'finance_review', approver: '李芳（财务审核）',
+    action: 'approved', timestamp: '2026-06-15T09:15:00', comment: '成本影响可控，同意执行',
+  },
+  {
+    id: 'FR003', approvalId: 'APR004', type: 'legal_review', approver: '王刚（法务合规）',
+    action: 'pending', timestamp: '2026-06-15T09:35:00', comment: '提交审批',
+  },
+  {
+    id: 'FR004', approvalId: 'APR004', type: 'legal_review', approver: '王刚（法务合规）',
+    action: 'approved', timestamp: '2026-06-15T11:20:00', comment: '合同条款审核通过',
+  },
+  {
+    id: 'FR005', approvalId: 'APR005', type: 'finance_review', approver: '李芳（财务审核）',
+    action: 'pending', timestamp: '2026-06-15T10:00:00', comment: '提交审批',
+  },
+  {
+    id: 'FR006', approvalId: 'APR005', type: 'finance_review', approver: '李芳（财务审核）',
+    action: 'escalated', timestamp: '2026-06-15T14:00:00', comment: '审批超时4小时未处理，自动升级',
+  },
 ];

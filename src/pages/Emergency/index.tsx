@@ -9,32 +9,37 @@ import ExecutionTimeline from '@/components/ui/ExecutionTimeline';
 import clsx from 'clsx';
 
 export default function Emergency() {
-  const { alerts, emergencyPlans, selectedAlertId, selectedPlanId, setSelectedAlert, setSelectedPlan } = useAppStore();
+  const { alerts, emergencyPlans, selectedAlertId, selectedPlanId, setSelectedAlert, setSelectedPlan, generatePlansForAlert, generateStepsForPlan } = useAppStore();
 
   const triggerAlert = useMemo(
     () => alerts.find((a) => a.id === selectedAlertId) ?? alerts[0],
     [alerts, selectedAlertId]
   );
 
-  const filteredPlans = useMemo(
-    () => emergencyPlans.filter((p) => p.triggerAlertId === triggerAlert.id),
-    [emergencyPlans, triggerAlert]
-  );
+  const filteredPlans = useMemo(() => {
+    const existing = emergencyPlans.filter((p) => p.triggerAlertId === triggerAlert.id);
+    if (existing.length > 0) return existing;
+    return generatePlansForAlert(triggerAlert);
+  }, [emergencyPlans, triggerAlert, generatePlansForAlert]);
 
   const activePlan = useMemo(
-    () => emergencyPlans.find((p) => p.id === selectedPlanId) ?? filteredPlans[0],
-    [emergencyPlans, selectedPlanId, filteredPlans]
+    () => filteredPlans.find((p) => p.id === selectedPlanId) ?? filteredPlans[0],
+    [filteredPlans, selectedPlanId]
   );
 
-  const planSteps = useMemo(
-    () => mockExecutionSteps.filter((s) => s.planId === activePlan?.id),
-    [activePlan]
-  );
+  const planSteps = useMemo(() => {
+    if (!activePlan) return [];
+    const existing = mockExecutionSteps.filter((s) => s.planId === activePlan.id);
+    if (existing.length > 0) return existing;
+    return generateStepsForPlan(activePlan.id);
+  }, [activePlan, generateStepsForPlan]);
 
   const relatedEvents = useMemo(() => {
     if (!activePlan) return [];
-    return mockRiskEvents.filter((e) => activePlan.relatedHistoricalEvents.includes(e.id));
-  }, [activePlan]);
+    const direct = mockRiskEvents.filter((e) => activePlan.relatedHistoricalEvents.includes(e.id));
+    if (direct.length > 0) return direct;
+    return mockRiskEvents.filter((e) => e.category === triggerAlert.category).slice(0, 2);
+  }, [activePlan, triggerAlert]);
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">

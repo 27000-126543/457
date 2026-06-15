@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/stores/appStore';
-import { mockEmergencyPlans, mockEscalationLogs } from '@/mock/data';
+import { mockEmergencyPlans } from '@/mock/data';
 import { getApprovalTypeLabel, getUrgencyLabel, formatDateTime } from '@/utils/format';
-import type { Urgency } from '@/types';
+import type { Urgency, ApprovalFlowRecord } from '@/types';
 import ApprovalEfficiencyChart from '@/components/charts/ApprovalEfficiencyChart';
 
 const URGENCY_ORDER: Record<Urgency, number> = { critical: 0, urgent: 1, normal: 2 };
@@ -18,15 +18,43 @@ const URGENCY_BADGE: Record<Urgency, string> = {
   critical: 'risk-badge-severe',
 };
 
+const ACTION_LABEL: Record<ApprovalFlowRecord['action'], string> = {
+  pending: '待审批',
+  approved: '已通过',
+  rejected: '已驳回',
+  escalated: '已升级',
+};
+
+const ACTION_COLOR: Record<ApprovalFlowRecord['action'], string> = {
+  pending: 'text-neon-cyan',
+  approved: 'text-emerald-400',
+  rejected: 'text-rose-critical',
+  escalated: 'text-amber-warn',
+};
+
+const ACTION_DOT: Record<ApprovalFlowRecord['action'], string> = {
+  pending: 'bg-neon-cyan',
+  approved: 'bg-emerald-400',
+  rejected: 'bg-rose-critical',
+  escalated: 'bg-amber-warn',
+};
+
 export default function Approval() {
-  const { approvals, approveItem, rejectItem } = useAppStore();
+  const {
+    approvals, flowRecords, escalationLogs,
+    approveItem, rejectItem, checkAndEscalate,
+  } = useAppStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 60000);
+    checkAndEscalate();
+    const t = setInterval(() => {
+      setNow(Date.now());
+      checkAndEscalate();
+    }, 30000);
     return () => clearInterval(t);
-  }, []);
+  }, [checkAndEscalate]);
 
   const isOverdue = (d: string) => now > new Date(d).getTime();
   const getCountdown = (d: string) => {
@@ -35,7 +63,7 @@ export default function Approval() {
     return `${Math.floor(diff / 3600000)}时${Math.floor((diff % 3600000) / 60000)}分`;
   };
 
-  const pending = approvals.filter((a) => a.status === 'pending');
+  const pending = approvals.filter((a) => a.status === 'pending' || a.status === 'escalated');
   const sorted = [...pending].sort(
     (a, b) => URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency]
   );
@@ -45,9 +73,26 @@ export default function Approval() {
   const relatedPlan = selected
     ? mockEmergencyPlans.find((p) => p.id === selected.planId)
     : null;
-  const escalation = selected
-    ? mockEscalationLogs.find((e) => e.approvalId === selected.id)
+
+  const planFlowRecords = selected
+    ? approvals
+        .filter((a) => a.planId === selected.planId)
+        .flatMap((a) => flowRecords.filter((fr) => fr.approvalId === a.id))
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    : [];
+
+  const nextPendingApproval = selected
+    ? approvals.find(
+        (a) =>
+          a.planId === selected.planId &&
+          a.id !== selected.id &&
+          (a.status === 'pending' || a.status === 'escalated')
+      )
     : null;
+
+  const selectedEscalations = selected
+    ? escalationLogs.filter((e) => e.approvalId === selected.id)
+    : [];
 
   return (
     <div className="p-6 space-y-6 min-h-screen">
@@ -87,6 +132,9 @@ export default function Approval() {
                   <span className="risk-badge-normal">
                     {getApprovalTypeLabel(item.type)}
                   </span>
+                  {item.status === 'escalated' && (
+                    <span className="risk-badge-warning">已升级</span>
+                  )}
                 </div>
                 <p className="text-sm text-white/90 mb-2 line-clamp-2">{item.summary}</p>
                 <div className="flex items-center justify-between text-xs text-steel">
@@ -131,7 +179,7 @@ export default function Approval() {
               key={selected.id}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="glass-card p-6 space-y-4"
+              className="glass-card p-6 space-y-4 max-h-[calc(100vh-340px)] overflow-y-auto pr-2"
             >
               <div className="flex items-center gap-3 mb-2">
                 <span className={URGENCY_BADGE[selected.urgency]}>
@@ -143,6 +191,9 @@ export default function Approval() {
                 <span className="text-steel text-sm">
                   提交: {formatDateTime(selected.submittedAt)}
                 </span>
+                {selected.status === 'escalated' && (
+                  <span className="risk-badge-warning">已升级</span>
+                )}
               </div>
               <h3 className="text-lg text-white font-medium">{selected.summary}</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -179,12 +230,34 @@ export default function Approval() {
                   </div>
                 </div>
               )}
-              {escalation && (
-                <div className="glass-card p-3 border-l-4 border-l-amber-warn">
-                  <div className="text-amber-warn text-xs">
-                    升级: {escalation.fromApprover} → {escalation.toApprover}
+              {selectedEscalations.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-steel text-xs">升级记录</div>
+                  {selectedEscalations.map((e) => (
+                    <div
+                      key={e.id}
+                      className="glass-card p-3 border-l-4 border-l-amber-warn"
+                    >
+                      <div className="text-amber-warn text-xs">
+                        升级: {e.fromApprover} → {e.toApprover}
+                      </div>
+                      <div className="text-steel text-xs mt-1">{e.reason}</div>
+                      <div className="text-steel text-xs mt-1">
+                        时间: {formatDateTime(e.escalatedAt)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {nextPendingApproval && (
+                <div className="glass-card p-3 border-l-4 border-l-neon-cyan">
+                  <div className="text-neon-cyan text-xs">下一待审批</div>
+                  <div className="text-white text-sm mt-1">
+                    {getApprovalTypeLabel(nextPendingApproval.type)} - {nextPendingApproval.currentApprover}
                   </div>
-                  <div className="text-steel text-xs mt-1">{escalation.reason}</div>
+                  <div className="text-steel text-xs mt-1">
+                    截止: {formatDateTime(nextPendingApproval.deadline)}
+                  </div>
                 </div>
               )}
               {selected.escalatedFrom && (
@@ -200,6 +273,36 @@ export default function Approval() {
                 </button>
                 <button className="btn-ghost">退回</button>
               </div>
+              {planFlowRecords.length > 0 && (
+                <div className="pt-4 border-t border-steel/20">
+                  <div className="text-steel text-xs mb-3">流转记录</div>
+                  <div className="relative pl-6">
+                    <div className="absolute left-2 top-1 bottom-1 w-px bg-steel/30" />
+                    {planFlowRecords.map((record) => (
+                      <div key={record.id} className="relative mb-4 last:mb-0">
+                        <div
+                          className={`absolute -left-5 top-1 w-3 h-3 rounded-full ${ACTION_DOT[record.action]} ring-4 ring-bg-dark`}
+                        />
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-medium ${ACTION_COLOR[record.action]}`}>
+                            {ACTION_LABEL[record.action]}
+                          </span>
+                          <span className="risk-badge-normal text-xs">
+                            {getApprovalTypeLabel(record.type)}
+                          </span>
+                        </div>
+                        <div className="text-white text-sm mt-1">{record.approver}</div>
+                        {record.comment && (
+                          <div className="text-steel text-xs mt-1">{record.comment}</div>
+                        )}
+                        <div className="text-steel text-xs mt-0.5">
+                          {formatDateTime(record.timestamp)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </motion.div>
           ) : (
             <div className="glass-card p-12 flex items-center justify-center text-steel">

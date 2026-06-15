@@ -182,3 +182,18 @@ export interface EscalationLog {
   reason: string;
   escalatedAt: string;
 }
+
+export interface ApprovalFlowRecord {
+  id: string;
+  approvalId: string;
+  type: ApprovalType;
+  approver: string;
+  action: 'pending' | 'approved' | 'rejected' | 'escalated';
+  timestamp: string;
+  comment?: string;
+}
+
+export interface AppStoreState {
+  flowRecords: ApprovalFlowRecord[];
+  escalationLogs: EscalationLog[];
+}

@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
+import * as XLSX from 'xlsx';
 import { mockSupplyRecords, mockSuppliers } from '@/mock/data';
-import type { RiskLevel } from '@/types';
-import { formatDate } from '@/utils/format';
+import type { RiskLevel, SupplyChainRecord } from '@/types';
+import { formatDate, getLevelLabel } from '@/utils/format';
 
 const CATEGORIES = ['半导体', '纺织品', '汽车零部件', '钢材', '显示面板', '硅晶圆', '铁矿石', '农产品'] as const;
 const RISK_LEVELS: RiskLevel[] = ['warning', 'severe', 'critical'];
@@ -10,6 +11,13 @@ const MILESTONES = ['订单', '生产', '运输', '交付'] as const;
 
 type SortKey = 'supplier' | 'category' | 'orderDate' | 'deliveryDate' | 'cost';
 type ViewMode = 'table' | 'timeline';
+
+function getRecordRiskLevel(record: SupplyChainRecord): RiskLevel {
+  if (record.status === '延迟风险' || record.riskEvents.length >= 2) return 'critical';
+  if (record.riskEvents.length === 1) return 'severe';
+  if (record.status === '生产中') return 'warning';
+  return 'normal';
+}
 
 export default function Query() {
   const [supplier, setSupplier] = useState('');
@@ -33,6 +41,7 @@ export default function Query() {
     if (categories.length) data = data.filter(r => categories.includes(r.category));
     if (dateStart) data = data.filter(r => r.orderDate >= dateStart);
     if (dateEnd) data = data.filter(r => r.deliveryDate <= dateEnd);
+    if (riskLevels.length) data = data.filter(r => riskLevels.includes(getRecordRiskLevel(r)));
     data.sort((a, b) => {
       const cmp = String(a[sortKey]).localeCompare(String(b[sortKey]));
       return sortAsc ? cmp : -cmp;
@@ -43,6 +52,28 @@ export default function Query() {
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortAsc(p => !p);
     else { setSortKey(key); setSortAsc(true); }
+  };
+
+  const handleExport = () => {
+    if (selected.size === 0) return;
+    const records = mockSupplyRecords.filter(r => selected.has(r.id));
+    const rows = records.map(r => ({
+      '供应商': r.supplier,
+      '品类': r.category,
+      '订单日期': formatDate(r.orderDate),
+      '交付日期': formatDate(r.deliveryDate),
+      '状态': r.status,
+      '风险事件数': r.riskEvents.length,
+      '金额(元)': r.cost,
+      '路径': r.path.join(' → '),
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '查询结果');
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    XLSX.writeFile(wb, `supply-chain-query-${ts}.xlsx`);
   };
 
   const SortHeader = ({ label, field }: { label: string; field: SortKey }) => (
@@ -80,7 +111,7 @@ export default function Query() {
             <label className="text-xs text-steel block mb-1">风险等级</label>
             <div className="flex gap-2">{RISK_LEVELS.map(r => (
               <label key={r} className="flex items-center gap-1 text-xs cursor-pointer">
-                <input type="checkbox" checked={riskLevels.includes(r)} onChange={() => toggleRisk(r)} className="accent-neon-cyan" />{r}
+                <input type="checkbox" checked={riskLevels.includes(r)} onChange={() => toggleRisk(r)} className="accent-neon-cyan" />{getLevelLabel(r)}
               </label>
             ))}</div>
           </div>
@@ -152,7 +183,7 @@ export default function Query() {
       )}
 
       <div className="flex gap-3">
-        <button className="btn-primary" onClick={() => alert(`已选中 ${selected.size} 项`)} disabled={selected.size === 0}>导出选中项</button>
+        <button className="btn-primary" onClick={handleExport} disabled={selected.size === 0}>导出选中项</button>
         <span className="text-xs text-steel self-center">已选择 {selected.size} / {filtered.length} 条</span>
       </div>
     </div>

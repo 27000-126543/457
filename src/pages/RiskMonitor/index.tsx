@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { mockRiskPaths, mockThresholds } from '@/mock/data';
-import type { RiskPath, ThresholdConfig } from '@/types';
+import type { RiskPath, ThresholdConfig, RiskLevel } from '@/types';
 import { getLevelLabel, getLevelBadgeClass, getRiskIndexColor } from '@/utils/format';
 import RiskRadarChart from '@/components/charts/RiskRadarChart';
 
@@ -130,10 +130,46 @@ function ThresholdTable({ configs, onChange }: { configs: ThresholdConfig[]; onC
 export default function RiskMonitor() {
   const [selectedId, setSelectedId] = useState(mockRiskPaths[0].id);
   const [thresholds, setThresholds] = useState<ThresholdConfig[]>(mockThresholds);
-  const selected = mockRiskPaths.find((p) => p.id === selectedId) ?? mockRiskPaths[0];
+  const [riskPaths, setRiskPaths] = useState<RiskPath[]>(mockRiskPaths);
+  const selected = riskPaths.find((p) => p.id === selectedId) ?? riskPaths[0];
+
+  const calcStatus = (index: number, threshold: number, config: ThresholdConfig | undefined): RiskLevel => {
+    if (!config) {
+      if (index >= threshold + 15) return 'critical';
+      if (index >= threshold) return 'severe';
+      if (index >= threshold - 10) return 'warning';
+      return 'normal';
+    }
+    if (index >= config.critical) return 'critical';
+    if (index >= config.severe) return 'severe';
+    if (index >= config.warning) return 'warning';
+    return 'normal';
+  };
+
+  const calcThreshold = (category: string, configs: ThresholdConfig[]): number => {
+    const config = configs.find((c) => c.category === category);
+    return config ? config.severe : 70;
+  };
+
+  const extractCategory = (pathName: string): string => {
+    const match = pathName.match(/\s(\S+?)供应链$/);
+    return match ? match[1] : '';
+  };
 
   const handleThresholdChange = (i: number, field: keyof ThresholdConfig, v: number) => {
-    setThresholds((prev) => prev.map((c, idx) => idx === i ? { ...c, [field]: v } : c));
+    const updatedConfigs = thresholds.map((c, idx) => idx === i ? { ...c, [field]: v } : c);
+    setThresholds(updatedConfigs);
+    const category = updatedConfigs[i].category;
+    const updatedConfig = updatedConfigs[i];
+    setRiskPaths((prev) =>
+      prev.map((p) => {
+        const pathCategory = extractCategory(p.name);
+        if (pathCategory !== category) return p;
+        const newThreshold = calcThreshold(category, updatedConfigs);
+        const newStatus = calcStatus(p.compositeIndex, newThreshold, updatedConfig);
+        return { ...p, threshold: newThreshold, status: newStatus };
+      })
+    );
   };
 
   return (
@@ -141,7 +177,7 @@ export default function RiskMonitor() {
       <div className="flex gap-6 flex-1 min-h-0">
         <div className="w-80 flex-shrink-0 space-y-3 overflow-y-auto pr-1">
           <h2 className="section-title">风险路径列表</h2>
-          {mockRiskPaths.map((p) => (
+          {riskPaths.map((p) => (
             <PathCard key={p.id} path={p} selected={p.id === selectedId} onClick={() => setSelectedId(p.id)} />
           ))}
         </div>
